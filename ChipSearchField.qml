@@ -104,6 +104,11 @@ BorderSurface {
                 enabled: root.inputEnabled
                 onClicked: root.removeRequested(chip.index)
               }
+              PanelToolTip {
+                visible: closeArea.containsMouse
+                text: "Remove \"" + chip.modelData + "\""
+                fontFamily: root.fontFamily
+              }
             }
           }
         }

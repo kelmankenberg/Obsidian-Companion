@@ -186,5 +186,60 @@ class CompanionTests(unittest.TestCase):
         self.assertEqual(path.read_text(encoding="utf-8"), "A private project note.")
 
 
+    def test_excluded_folders_are_skipped_by_search_and_tasks(self):
+        (self.root / "Templates").mkdir()
+        (self.root / "Templates" / "t.md").write_text("- [ ] Template task alpha\n", encoding="utf-8")
+        (self.root / "real.md").write_text("- [ ] Real task alpha\n", encoding="utf-8")
+        self.run_action("save_vault_settings", settings={"excludedFolders": ["Templates"]})
+        notes = self.run_action("search", query="alpha")["items"]
+        tasks = self.run_action("tasks")["items"]
+        self.assertEqual([note["path"] for note in notes], ["real.md"])
+        self.assertEqual([task["path"] for task in tasks], ["real.md"])
+
+    def test_capture_uses_saved_format_target_and_folder(self):
+        self.run_action("save_vault_settings", settings={
+            "captureFolder": "Captures", "captureFormat": "task", "captureTarget": "inbox",
+        })
+        self.run_action("capture", text="Call Bob")
+        note = self.root / "Captures" / f"{dt.date.today().isoformat()}.md"
+        self.assertTrue(note.read_text(encoding="utf-8").endswith("- [ ] Call Bob\n"))
+
+    def test_daily_override_replaces_obsidian_daily_settings(self):
+        self.run_action("save_vault_settings", settings={
+            "dailyOverride": True, "dailyFolder": "Journal", "dailyFormat": "YYYY-MM-DD",
+        })
+        self.run_action("daily")
+        self.assertTrue((self.root / "Journal" / f"{dt.date.today().isoformat()}.md").is_file())
+
+    def test_custom_vault_can_be_added_and_removed(self):
+        other = Path(self.temp.name) / "Other"
+        other.mkdir()
+        added = companion._handle({"action": "add_vault", "vault": str(other)})
+        self.assertIn(str(other.resolve()), [vault["path"] for vault in added["vaults"]])
+        self.assertEqual(added["selectedVault"], str(other.resolve()))
+        removed = companion._handle({"action": "remove_vault", "vault": str(other)})
+        self.assertNotIn(str(other.resolve()), [vault["path"] for vault in removed["vaults"]])
+        self.assertEqual(removed["selectedVault"], str(self.root.resolve()))
+        with self.assertRaises(companion.CompanionError):
+            companion._handle({"action": "remove_vault", "vault": str(self.root)})
+
+    def test_clear_recent_and_hiding_obsidian_history_empty_recent(self):
+        (self.root / "a.md").write_text("# A\n", encoding="utf-8")
+        (self.root / ".obsidian" / "workspace.json").write_text(
+            json.dumps({"lastOpenFiles": ["a.md"]}), encoding="utf-8"
+        )
+        self.run_action("open", path="a.md")
+        self.run_action("clear_recent")
+        self.assertEqual(len(self.run_action("recent")["items"]), 1)
+        self.run_action("save_vault_settings", settings={"includeObsidianRecent": False})
+        self.assertEqual(self.run_action("recent")["items"], [])
+
+    def test_ai_can_be_disabled_in_settings(self):
+        (self.root / "note.md").write_text("Text", encoding="utf-8")
+        self.run_action("save_vault_settings", settings={}, ui={"aiEnabled": False})
+        with self.assertRaises(companion.CompanionError):
+            self.run_action("ai_prompt", path="note.md", question="Summarize")
+
+
 if __name__ == "__main__":
     unittest.main()

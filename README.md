@@ -15,7 +15,8 @@ Obsidian or Omarchy.
 - Open recent or pinned notes in Obsidian.
 - Open or create today's daily note using Obsidian's Daily Notes settings
   (`.obsidian/daily-notes.json`) when available.
-- Capture a bullet into a dated Inbox note or today's daily note.
+- Capture a bullet, task, or timestamped line into a dated Inbox note or
+  today's daily note.
 - Create a note in a chosen folder, optionally from a vault template.
 - Review unchecked Markdown tasks, filter them by text or note path (using the
   same removable term chips as Search), sort by
@@ -40,8 +41,8 @@ argument and may be visible to local process inspection tools while it runs.
 omarchy plugin add https://github.com/kelmankenberg/Obsidian-Companion.git --enable
 ```
 
-The widget defaults to the right side of the bar. Place it in another section
-with Omarchy's standard bar command:
+The widget defaults to the right side of the bar. Move it from **Settings →
+Panel → Bar position**, or with Omarchy's standard bar command:
 
 ```sh
 omarchy bar move kel.obsidian-companion --section left
@@ -52,19 +53,19 @@ omarchy bar move kel.obsidian-companion --section right
 ## Use
 
 Click the Obsidian icon. The plugin detects vaults from Obsidian's local
-configuration; use the gear button to select a different or custom vault.
+configuration; when more than one vault is known, switch between them from
+the dropdown in the header.
 Search, recent, pinned, and task views are separate tabs. Use **Today** to open
 the current daily note. Captures go to an Inbox note or directly to today's
-note. New notes are created in the folder you enter (default `Notes/`) and can
-start from any template in the vault's configured templates folder.
+note. New notes are created in the folder you enter (default from Settings)
+and can start from any template in the vault's configured templates folder.
 
 **Recent** combines Obsidian's own history (`.obsidian/workspace.json`
 `lastOpenFiles`) with notes opened from Companion. **Pinned** notes are saved
 per vault. Companion's state lives in
 `~/.local/state/obsidian-companion/state.json`.
 
-The vault can also be selected with the native folder picker if Obsidian has
-not yet registered it. Search, capture, and vault operations are local; no
+Search, capture, and vault operations are local; no
 search index, background service, or plugin-initiated network request is
 created. AI handoff invokes the configured agent, which may send the selected
 note to its provider.
@@ -73,6 +74,30 @@ Reminder settings are per vault and off by default. Due-date alerts recognize
 the Obsidian Tasks `📅 YYYY-MM-DD` marker; they notify once at the chosen time
 on the due date or later if the shell was not running then. Daily summaries
 count open tasks without including task text in the notification.
+
+## Settings
+
+Click the large ⚙ button to open Settings, then **Save** to apply edits.
+Vault, bar-position, and history actions apply immediately.
+
+- **Vaults** — switch vaults, add a vault folder that Obsidian has not
+  registered, or remove an added vault.
+- **New notes** — default folder and template.
+- **Quick capture** — Inbox folder, line format (bullet, task, or
+  timestamped), and whether Enter sends to the Inbox or today's daily note.
+- **Daily notes** — optionally override Obsidian's daily note folder, date
+  format, and template.
+- **Search and tasks** — folders to exclude (relative to the vault, including
+  subfolders).
+- **Task reminders** — off, daily summary, or due-date alerts, and the time.
+- **Panel** — tab shown when the panel opens and bar position.
+- **Recent** — include or hide Obsidian's own recent files, and clear the
+  notes Companion has recorded (Obsidian's history is never modified).
+- **AI** — show or hide Ask AI and manage preset questions.
+
+Vault-specific settings apply to the current vault. Panel and AI settings
+apply to all vaults. `omarchy-shell kel.obsidian-companion settings` opens the
+panel directly on Settings.
 
 ## Requirements and permissions
 
@@ -90,7 +115,7 @@ before enabling it.
 ```sh
 python3 -m unittest discover -s tests
 omarchy plugin validate .
-qmllint -I "$OMARCHY_PATH/shell" BarWidget.qml Panel.qml
+qmllint -I "$OMARCHY_PATH/shell" -I . BarWidget.qml Panel.qml SettingsView.qml ChipSearchField.qml Choice.qml
 ```
 
 To try local changes, copy the plugin into
