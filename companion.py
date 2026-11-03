@@ -19,6 +19,7 @@ MAX_FILES = 20_000
 MAX_RESULTS = 80
 MAX_REMINDER_TASKS = 10_000
 REMINDER_MODES = {"off", "daily_summary", "due_dates"}
+TASK_SORTS = {"file", "due_asc", "due_desc"}
 SKIP_DIRS = {".obsidian", ".trash", ".git", ".stversions", "node_modules"}
 STATE_HOME = Path(
     os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))
@@ -305,6 +306,26 @@ def _tasks(root: Path, limit: int = MAX_RESULTS) -> list[dict[str, Any]]:
     return results
 
 
+def _filtered_tasks(root: Path, text: str, sort: str) -> list[dict[str, Any]]:
+    if sort not in TASK_SORTS:
+        raise CompanionError("Choose a valid task sort order.")
+    needle = text.strip().casefold()
+    tasks = _tasks(root, MAX_REMINDER_TASKS)
+    if needle:
+        tasks = [
+            task for task in tasks
+            if needle in task["text"].casefold() or needle in task["path"].casefold()
+        ]
+    if sort != "file":
+        dated = sorted(
+            (task for task in tasks if task["due"]),
+            key=lambda task: task["due"],
+            reverse=sort == "due_desc",
+        )
+        tasks = dated + [task for task in tasks if not task["due"]]
+    return tasks[:MAX_RESULTS]
+
+
 def _reminder_settings(state: dict[str, Any], root: Path) -> dict[str, Any]:
     settings = state["reminders"].setdefault(
         str(root), {"mode": "off", "time": "09:00", "sent": {}}
@@ -457,7 +478,14 @@ def _handle(request: dict[str, Any]) -> dict[str, Any]:
                 continue
         return {"ok": True, "items": items}
     if action == "tasks":
-        return {"ok": True, "items": _tasks(root)}
+        return {
+            "ok": True,
+            "items": _filtered_tasks(
+                root,
+                str(request.get("filter", ""))[:200],
+                str(request.get("sort", "file")),
+            ),
+        }
     if action == "set_reminders":
         mode = request.get("mode", "off")
         time = str(request.get("time", "09:00"))

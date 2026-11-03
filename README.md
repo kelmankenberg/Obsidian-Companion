@@ -15,7 +15,9 @@ Obsidian or Omarchy.
   (`.obsidian/daily-notes.json`) when available.
 - Capture a bullet into a dated Inbox note or today's daily note.
 - Create a note in a chosen folder, optionally from a vault template.
-- Review unchecked Markdown tasks and explicitly mark them done.
+- Review unchecked Markdown tasks, filter them by text or note path, sort by
+  due date (ascending or descending; undated tasks last), and explicitly mark
+  them done.
 - Choose optional daily task summaries or alerts for due/overdue Obsidian
   Tasks items, with a configurable local time.
 - Ask the configured Omarchy agent a question about a selected note.

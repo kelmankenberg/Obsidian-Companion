@@ -76,6 +76,25 @@ class CompanionTests(unittest.TestCase):
         self.run_action("complete_task", **task)
         self.assertEqual((self.root / "tasks.md").read_text(encoding="utf-8"), "- [x] Ship this\n")
 
+    def test_tasks_filter_and_sort_by_due_date_with_undated_last(self):
+        (self.root / "a.md").write_text(
+            "- [ ] Undated report\n"
+            "- [ ] Late report 📅 2026-03-01\n"
+            "- [ ] Early report 📅 2026-01-01\n"
+            "- [ ] Buy milk 📅 2026-02-01\n",
+            encoding="utf-8",
+        )
+        ascending = self.run_action("tasks", filter="REPORT", sort="due_asc")["items"]
+        descending = self.run_action("tasks", filter="report", sort="due_desc")["items"]
+        self.assertEqual(
+            [task["text"] for task in ascending],
+            ["Early report 📅 2026-01-01", "Late report 📅 2026-03-01", "Undated report"],
+        )
+        self.assertEqual(
+            [task["text"] for task in descending],
+            ["Late report 📅 2026-03-01", "Early report 📅 2026-01-01", "Undated report"],
+        )
+
     def test_create_note_can_use_a_configured_template(self):
         (self.root / ".obsidian" / "templates.json").write_text(
             json.dumps({"folder": "Templates"}), encoding="utf-8"

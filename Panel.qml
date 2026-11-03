@@ -17,6 +17,8 @@ Panel {
   property bool busy: false
   property string activeTab: "search"
   property string query: ""
+  property string taskFilter: ""
+  property string taskSort: "file"
   property string noteTitle: ""
   property string createFolder: "Notes"
   property string createTemplate: ""
@@ -223,7 +225,11 @@ Panel {
     if (!selectedVault) return
     if (activeTab === "recent") request("recent", { vault: selectedVault })
     else if (activeTab === "pinned") request("pinned", { vault: selectedVault })
-    else if (activeTab === "tasks") request("tasks", { vault: selectedVault })
+    else if (activeTab === "tasks") request("tasks", {
+      vault: selectedVault,
+      filter: taskFilter.trim(),
+      sort: taskSort
+    })
     else if (query.trim()) request("search", { vault: selectedVault, query: query.trim() })
   }
 
@@ -337,6 +343,15 @@ Panel {
     onTriggered: {
       if (root.selectedVault && root.activeTab === "search")
         root.request("search", { vault: root.selectedVault, query: root.query.trim() })
+    }
+  }
+
+  Timer {
+    id: taskFilterDebounce
+    interval: 250
+    repeat: false
+    onTriggered: {
+      if (root.selectedVault && root.activeTab === "tasks") root.refreshCurrentView()
     }
   }
 
@@ -580,6 +595,33 @@ Panel {
           spacing: Style.space(6)
           RowLayout {
             width: parent.width
+            spacing: Style.space(6)
+            TextField {
+              Layout.fillWidth: true
+              placeholderText: "Filter tasks"
+              text: root.taskFilter
+              enabled: !!root.selectedVault
+              onTextEdited: {
+                root.taskFilter = text
+                taskFilterDebounce.restart()
+              }
+              Keys.onReturnPressed: {
+                taskFilterDebounce.stop()
+                root.refreshCurrentView()
+              }
+            }
+            ComboBox {
+              Layout.preferredWidth: Style.space(170)
+              model: ["File order", "Due date ↑", "Due date ↓"]
+              currentIndex: root.taskSort === "due_asc" ? 1 : (root.taskSort === "due_desc" ? 2 : 0)
+              onActivated: function(index) {
+                root.taskSort = index === 1 ? "due_asc" : (index === 2 ? "due_desc" : "file")
+                root.refreshCurrentView()
+              }
+            }
+          }
+          RowLayout {
+            width: parent.width
             Text {
               Layout.fillWidth: true
               text: "Task reminders"
@@ -737,7 +779,7 @@ Panel {
             ? "No recent notes found. Open a note in Obsidian or from Companion."
             : (root.activeTab === "pinned"
             ? "No pinned notes yet. Pin one from Search or Recent."
-            : "No open tasks found.")
+            : (root.taskFilter.trim() ? "No open tasks match this filter." : "No open tasks found."))
           color: Color.popups.text
           opacity: 0.7
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
