@@ -95,6 +95,17 @@ class CompanionTests(unittest.TestCase):
             ["Late report 📅 2026-03-01", "Early report 📅 2026-01-01", "Undated report"],
         )
 
+    def test_search_and_task_terms_must_all_match(self):
+        (self.root / "both.md").write_text("ESV notes on Hebrews\n", encoding="utf-8")
+        (self.root / "one.md").write_text("ESV notes on Romans\n", encoding="utf-8")
+        (self.root / "tasks.md").write_text(
+            "- [ ] Read ESV Hebrews\n- [ ] Read ESV Romans\n", encoding="utf-8"
+        )
+        notes = self.run_action("search", terms=["esv"], query="Hebrews")["items"]
+        self.assertEqual([note["path"] for note in notes], ["both.md", "tasks.md"])
+        tasks = self.run_action("tasks", terms=["ESV", "romans"])["items"]
+        self.assertEqual([task["text"] for task in tasks], ["Read ESV Romans"])
+
     def test_create_note_can_use_a_configured_template(self):
         (self.root / ".obsidian" / "templates.json").write_text(
             json.dumps({"folder": "Templates"}), encoding="utf-8"

@@ -20,6 +20,7 @@ MAX_RESULTS = 80
 MAX_REMINDER_TASKS = 10_000
 REMINDER_MODES = {"off", "daily_summary", "due_dates"}
 TASK_SORTS = {"file", "due_asc", "due_desc"}
+MAX_TERMS = 12
 SKIP_DIRS = {".obsidian", ".trash", ".git", ".stversions", "node_modules"}
 STATE_HOME = Path(
     os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))
@@ -153,15 +154,16 @@ def _note_title(path: Path, content: str) -> str:
 
 
 def _note_item(
-    root: Path, path: Path, query: str = "", pinned: bool = False
+    root: Path, path: Path, terms: list[str] | None = None, pinned: bool = False
 ) -> dict[str, Any]:
     content = _read_note(path)
     relative = path.relative_to(root).as_posix()
     title = _note_title(path, content)
     preview = ""
-    if query:
+    if terms:
         for line in content.splitlines():
-            if query.casefold() in line.casefold():
+            folded = line.casefold()
+            if any(term in folded for term in terms):
                 preview = line.strip()[:240]
                 break
     return {"path": relative, "title": title, "preview": preview, "pinned": pinned}
@@ -267,16 +269,31 @@ def _capture(root: Path, state: dict[str, Any], request: dict[str, Any]) -> dict
     return {"ok": True, "message": f"Captured to {path.relative_to(root).as_posix()}."}
 
 
-def _search(root: Path, query: str, pins: list[str]) -> list[dict[str, Any]]:
-    needle = query.casefold()
-    if not needle:
+def _request_terms(request: dict[str, Any], text_key: str) -> list[str]:
+    """Combine chip terms with the text still being typed; all must match."""
+    raw = request.get("terms", [])
+    if not isinstance(raw, list):
+        raise CompanionError("Search terms must be a list.")
+    values = [str(term) for term in raw[:MAX_TERMS]]
+    values.append(str(request.get(text_key, "")))
+    terms = []
+    for value in values:
+        term = value.strip()[:200].casefold()
+        if term and term not in terms:
+            terms.append(term)
+    return terms
+
+
+def _search(root: Path, terms: list[str], pins: list[str]) -> list[dict[str, Any]]:
+    if not terms:
         return []
     results = []
     for path in _markdown_files(root):
         content = _read_note(path)
-        if needle in path.stem.casefold() or needle in content.casefold():
+        haystack = path.stem.casefold() + "\n" + content.casefold()
+        if all(term in haystack for term in terms):
             relative = path.relative_to(root).as_posix()
-            results.append(_note_item(root, path, query, relative in pins))
+            results.append(_note_item(root, path, terms, relative in pins))
             if len(results) >= MAX_RESULTS:
                 break
     return results
@@ -306,15 +323,17 @@ def _tasks(root: Path, limit: int = MAX_RESULTS) -> list[dict[str, Any]]:
     return results
 
 
-def _filtered_tasks(root: Path, text: str, sort: str) -> list[dict[str, Any]]:
+def _filtered_tasks(root: Path, terms: list[str], sort: str) -> list[dict[str, Any]]:
     if sort not in TASK_SORTS:
         raise CompanionError("Choose a valid task sort order.")
-    needle = text.strip().casefold()
     tasks = _tasks(root, MAX_REMINDER_TASKS)
-    if needle:
+    if terms:
         tasks = [
             task for task in tasks
-            if needle in task["text"].casefold() or needle in task["path"].casefold()
+            if all(
+                term in (task["text"] + "\n" + task["path"]).casefold()
+                for term in terms
+            )
         ]
     if sort != "file":
         dated = sorted(
@@ -438,7 +457,7 @@ def _handle(request: dict[str, Any]) -> dict[str, Any]:
         pins = state["pinned"].get(str(root), [])
         return {
             "ok": True,
-            "items": _search(root, str(request.get("query", ""))[:200], pins),
+            "items": _search(root, _request_terms(request, "query"), pins),
         }
     if action in {"recent", "pinned"}:
         if action == "recent":
@@ -482,7 +501,7 @@ def _handle(request: dict[str, Any]) -> dict[str, Any]:
             "ok": True,
             "items": _filtered_tasks(
                 root,
-                str(request.get("filter", ""))[:200],
+                _request_terms(request, "filter"),
                 str(request.get("sort", "file")),
             ),
         }

@@ -9,18 +9,23 @@ Obsidian or Omarchy.
 
 ## Features
 
-- Search Markdown note titles and contents across the selected vault.
+- Search Markdown note titles and contents across the selected vault. Press
+  Enter to keep a term as a removable chip; results must match every chip plus
+  any text still being typed. Backspace in the empty box removes the last chip.
 - Open recent or pinned notes in Obsidian.
 - Open or create today's daily note using Obsidian's Daily Notes settings
   (`.obsidian/daily-notes.json`) when available.
 - Capture a bullet into a dated Inbox note or today's daily note.
 - Create a note in a chosen folder, optionally from a vault template.
-- Review unchecked Markdown tasks, filter them by text or note path, sort by
+- Review unchecked Markdown tasks, filter them by text or note path (using the
+  same removable term chips as Search), sort by
   due date (ascending or descending; undated tasks last), and explicitly mark
   them done.
 - Choose optional daily task summaries or alerts for due/overdue Obsidian
   Tasks items, with a configurable local time.
-- Ask the configured Omarchy agent a question about a selected note.
+- Ask the configured Omarchy agent a question about a selected note. Click a
+  note in Search, Recent, or Pinned to select it; use **Open** (or double-click)
+  to open it in Obsidian.
 
 The AI handoff is an explicit action. It sends the selected note text (up to
 30,000 characters) and the user's question to `omarchy agent prompt`; the

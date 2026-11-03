@@ -18,6 +18,10 @@ Panel {
   property string activeTab: "search"
   property string query: ""
   property string taskFilter: ""
+  property var searchTerms: []
+  property string selectedPath: ""
+  property string selectedTitle: ""
+  property var taskTerms: []
   property string taskSort: "file"
   property string noteTitle: ""
   property string createFolder: "Notes"
@@ -48,6 +52,10 @@ Panel {
   }
 
   function showItems(items) {
+    var keepSelection = false
+    for (var j = 0; j < items.length; j++)
+      if (String(items[j].path || "") === selectedPath) keepSelection = true
+    if (!keepSelection) selectNote(null)
     displayedNotes.clear()
     for (var i = 0; i < items.length; i++)
       displayedNotes.append({
@@ -59,6 +67,66 @@ Panel {
         due: String(items[i].due || ""),
         line: Number.isInteger(items[i].line) ? items[i].line : -1
       })
+  }
+
+  function addTerm(list, text) {
+    var term = String(text || "").trim()
+    if (!term) return list
+    for (var i = 0; i < list.length; i++)
+      if (list[i].toLowerCase() === term.toLowerCase()) return list
+    return list.concat([term])
+  }
+
+  function commitSearchTerm() {
+    searchDebounce.stop()
+    searchTerms = addTerm(searchTerms, query)
+    query = ""
+    refreshCurrentView()
+  }
+
+  function commitTaskTerm() {
+    taskFilterDebounce.stop()
+    taskTerms = addTerm(taskTerms, taskFilter)
+    taskFilter = ""
+    refreshCurrentView()
+  }
+
+  function removeSearchTerm(index) {
+    var next = searchTerms.slice()
+    next.splice(index, 1)
+    searchTerms = next
+    if (next.length === 0 && !query.trim()) {
+      results = []
+      showItems([])
+    } else {
+      refreshCurrentView()
+    }
+  }
+
+  function removeTaskTerm(index) {
+    var next = taskTerms.slice()
+    next.splice(index, 1)
+    taskTerms = next
+    refreshCurrentView()
+  }
+
+  function clearSearchTerms() {
+    searchDebounce.stop()
+    searchTerms = []
+    query = ""
+    results = []
+    showItems([])
+  }
+
+  function clearTaskTerms() {
+    taskFilterDebounce.stop()
+    taskTerms = []
+    taskFilter = ""
+    refreshCurrentView()
+  }
+
+  function hasSearchInput() {
+    return searchTerms.length > 0 || query.trim() !== ""
   }
 
   function noteFromDelegate(row) {
@@ -228,9 +296,14 @@ Panel {
     else if (activeTab === "tasks") request("tasks", {
       vault: selectedVault,
       filter: taskFilter.trim(),
+      terms: taskTerms,
       sort: taskSort
     })
-    else if (query.trim()) request("search", { vault: selectedVault, query: query.trim() })
+    else if (hasSearchInput()) request("search", {
+      vault: selectedVault,
+      query: query.trim(),
+      terms: searchTerms
+    })
   }
 
   function selectVault(path) {
@@ -271,11 +344,20 @@ Panel {
     request("daily", { vault: selectedVault })
   }
 
-  function askAgent(note) {
-    if (!note || !aiQuestion.trim()) return
+  function selectNote(note) {
+    selectedPath = note ? String(note.path || "") : ""
+    selectedTitle = note ? String(note.title || note.path || "") : ""
+  }
+
+  function aiAvailable() {
+    return activeTab !== "tasks" && displayedNotes.count > 0
+  }
+
+  function askAgent() {
+    if (!selectedPath || !aiQuestion.trim()) return
     request("ai_prompt", {
       vault: selectedVault,
-      path: note.path,
+      path: selectedPath,
       question: aiQuestion.trim()
     })
   }
@@ -341,8 +423,13 @@ Panel {
     interval: 250
     repeat: false
     onTriggered: {
-      if (root.selectedVault && root.activeTab === "search")
-        root.request("search", { vault: root.selectedVault, query: root.query.trim() })
+      if (!root.selectedVault || root.activeTab !== "search") return
+      if (root.hasSearchInput()) {
+        root.refreshCurrentView()
+      } else {
+        root.results = []
+        root.showItems([])
+      }
     }
   }
 
@@ -452,21 +539,22 @@ Panel {
           font.pixelSize: Style.font.bodySmall
         }
 
-        TextField {
+        ChipSearchField {
           id: searchField
           visible: root.activeTab === "search"
           width: parent.width
-          placeholderText: "Search note titles and contents"
+          terms: root.searchTerms
           text: root.query
-          enabled: !!root.selectedVault && !root.busy
-          onTextEdited: {
+          placeholderText: "Search notes… (Enter adds a term)"
+          inputEnabled: !!root.selectedVault && !root.busy
+          fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+          onEdited: function(text) {
             root.query = text
             searchDebounce.restart()
           }
-          Keys.onReturnPressed: {
-            searchDebounce.stop()
-            root.refreshCurrentView()
-          }
+          onAccepted: root.commitSearchTerm()
+          onRemoveRequested: function(index) { root.removeSearchTerm(index) }
+          onClearRequested: root.clearSearchTerms()
         }
 
         Column {
@@ -596,19 +684,20 @@ Panel {
           RowLayout {
             width: parent.width
             spacing: Style.space(6)
-            TextField {
+            ChipSearchField {
               Layout.fillWidth: true
-              placeholderText: "Filter tasks"
+              terms: root.taskTerms
               text: root.taskFilter
-              enabled: !!root.selectedVault
-              onTextEdited: {
+              placeholderText: "Filter tasks… (Enter adds a term)"
+              inputEnabled: !!root.selectedVault
+              fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+              onEdited: function(text) {
                 root.taskFilter = text
                 taskFilterDebounce.restart()
               }
-              Keys.onReturnPressed: {
-                taskFilterDebounce.stop()
-                root.refreshCurrentView()
-              }
+              onAccepted: root.commitTaskTerm()
+              onRemoveRequested: function(index) { root.removeTaskTerm(index) }
+              onClearRequested: root.clearTaskTerms()
             }
             ComboBox {
               Layout.preferredWidth: Style.space(170)
@@ -697,9 +786,12 @@ Panel {
                 width: notesList.width
                 height: rowContent.implicitHeight + Style.space(12)
                 radius: Math.min(4, Style.cornerRadius)
-                color: Color.popups.background
-                border.color: Color.popups.border
-                border.width: 1
+                readonly property bool isSelected: root.activeTab !== "tasks" && root.selectedPath === row.path
+                color: isSelected
+                  ? Style.selectionFillFor(Color.popups.text, Color.accent)
+                  : Color.popups.background
+                border.color: isSelected ? Color.accent : Color.popups.border
+                border.width: isSelected ? 2 : 1
 
                 RowLayout {
                   id: rowContent
@@ -745,12 +837,6 @@ Panel {
                     })
                   }
                   Button {
-                    visible: root.activeTab === "search"
-                    text: "Ask AI"
-                    enabled: !!root.aiQuestion.trim() && !root.busy
-                    onClicked: root.askAgent(root.noteFromDelegate(row))
-                  }
-                  Button {
                     visible: root.activeTab !== "tasks"
                     text: root.noteIsPinned(root.noteFromDelegate(row)) ? "★" : "☆"
                     enabled: !root.busy
@@ -766,8 +852,11 @@ Panel {
                 MouseArea {
                   anchors.fill: parent
                   z: -1
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.openNote(root.noteFromDelegate(row))
+                  cursorShape: root.activeTab === "tasks" ? Qt.ArrowCursor : Qt.PointingHandCursor
+                  onClicked: {
+                    if (root.activeTab !== "tasks") root.selectNote(root.noteFromDelegate(row))
+                  }
+                  onDoubleClicked: root.openNote(root.noteFromDelegate(row))
                 }
               }
         }
@@ -779,7 +868,8 @@ Panel {
             ? "No recent notes found. Open a note in Obsidian or from Companion."
             : (root.activeTab === "pinned"
             ? "No pinned notes yet. Pin one from Search or Recent."
-            : (root.taskFilter.trim() ? "No open tasks match this filter." : "No open tasks found."))
+            : ((root.taskFilter.trim() || root.taskTerms.length)
+              ? "No open tasks match this filter." : "No open tasks found."))
           color: Color.popups.text
           opacity: 0.7
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -789,7 +879,7 @@ Panel {
 
         Text {
           visible: root.activeTab === "search" && root.results.length === 0 && !root.busy
-            && root.query.trim() !== ""
+            && root.hasSearchInput()
           width: parent.width
           text: "No matching notes."
           color: Color.popups.text
@@ -800,16 +890,42 @@ Panel {
         }
 
         Column {
-          visible: root.activeTab === "search" && displayedNotes.count > 0
+          visible: root.aiAvailable()
           width: parent.width
           spacing: Style.space(6)
-          TextField {
-            id: aiQuestionField
+          Text {
             width: parent.width
-            placeholderText: "Ask your configured AI about a search result"
-            text: root.aiQuestion
-            enabled: !root.busy
-            onTextEdited: root.aiQuestion = text
+            text: root.selectedPath
+              ? "Selected: " + root.selectedTitle
+              : "Click a note above to select it for AI."
+            color: Color.popups.text
+            opacity: root.selectedPath ? 0.9 : 0.68
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+            font.bold: !!root.selectedPath
+            elide: Text.ElideRight
+          }
+          RowLayout {
+            width: parent.width
+            spacing: Style.space(6)
+            TextField {
+              id: aiQuestionField
+              Layout.fillWidth: true
+              placeholderText: root.selectedPath
+                ? "Ask your configured AI about this note"
+                : "Select a note, then ask a question"
+              text: root.aiQuestion
+              enabled: !root.busy
+              onTextEdited: root.aiQuestion = text
+              Keys.onReturnPressed: root.askAgent()
+              Keys.onEnterPressed: root.askAgent()
+            }
+            Button {
+              text: "Ask AI"
+              bordered: true
+              enabled: !!root.selectedPath && !!root.aiQuestion.trim() && !root.busy
+              onClicked: root.askAgent()
+            }
           }
           Text {
             width: parent.width
