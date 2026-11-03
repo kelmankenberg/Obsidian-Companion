@@ -119,6 +119,7 @@ Item {
   }
 
   component Hint: Text {
+    textFormat: Text.PlainText
     color: Color.popups.text
     opacity: 0.62
     font.family: settings.fontFamily
@@ -207,6 +208,7 @@ Item {
             spacing: Style.space(2)
             Text {
               width: parent.width
+              textFormat: Text.PlainText
               text: vaultRow.modelData.name + (vaultRow.current ? "  · current" : "")
                 + (vaultRow.modelData.custom ? "  · added" : "")
               color: Color.popups.text
@@ -509,6 +511,7 @@ Item {
             spacing: Style.space(8)
             Text {
               Layout.fillWidth: true
+              textFormat: Text.PlainText
               text: presetRow.modelData
               color: Color.popups.text
               font.family: settings.fontFamily

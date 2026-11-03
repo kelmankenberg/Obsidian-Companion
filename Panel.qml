@@ -568,6 +568,7 @@ Panel {
             }
             Text {
               visible: root.vaults.length <= 1
+              textFormat: Text.PlainText
               Layout.fillWidth: true
               text: root.selectedVault ? root.selectedVault.split("/").pop() : "Add a vault in Settings to get started"
               color: Color.popups.text
@@ -606,6 +607,7 @@ Panel {
 
         Text {
           visible: root.errorMessage !== ""
+          textFormat: Text.PlainText
           width: parent.width
           text: root.errorMessage
           color: "#ff8a80"
@@ -616,6 +618,7 @@ Panel {
 
         Text {
           visible: root.notice !== ""
+          textFormat: Text.PlainText
           width: parent.width
           text: root.notice
           color: Color.popups.text
@@ -855,6 +858,7 @@ Panel {
                       spacing: Style.space(2)
                       Text {
                         Layout.fillWidth: true
+                        textFormat: Text.PlainText
                         text: row.title || row.taskText || row.path
                         color: Color.popups.text
                         font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -866,6 +870,7 @@ Panel {
                       }
                       Text {
                         Layout.fillWidth: true
+                        textFormat: Text.PlainText
                         visible: !!row.preview || !!row.path
                         text: root.activeTab === "tasks" && row.due
                           ? "Due " + row.due + " · " + row.path
@@ -960,6 +965,7 @@ Panel {
             spacing: Style.space(6)
             Text {
               width: parent.width
+              textFormat: Text.PlainText
               text: root.selectedPath
                 ? "Selected: " + root.selectedTitle
                 : "Click a note above to select it for AI."

@@ -81,6 +81,7 @@ BorderSurface {
             spacing: Style.space(8)
             Text {
               anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
               text: chip.modelData
               color: root.foreground
               font.family: root.fontFamily

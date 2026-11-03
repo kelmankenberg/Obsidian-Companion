@@ -74,6 +74,9 @@ and can start from any template in the vault's configured templates folder.
 `lastOpenFiles`) with notes opened from Companion. **Pinned** notes are saved
 per vault. Companion's state lives in
 `~/.local/state/obsidian-companion/state.json`.
+The state directory is owner-only (`0700`) and its files are owner-readable
+and writable (`0600`); existing state permissions are repaired when loaded.
+Note titles and previews are displayed as plain text, never rendered as HTML.
 
 Search, capture, and vault operations are local; no
 search index, background service, or plugin-initiated network request is

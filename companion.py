@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -51,15 +52,34 @@ def _read_json(path: Path, default: Any) -> Any:
         raise CompanionError(f"Could not read {path}: {error}") from error
 
 
-def _write_state(state: dict[str, Any]) -> None:
+def _private_state_directory() -> Path:
     state_dir = STATE_PATH.parent
-    state_dir.mkdir(parents=True, exist_ok=True)
-    temporary = state_dir / "state.json.tmp"
-    temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(STATE_PATH)
+    state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    state_dir.chmod(0o700)
+    return state_dir
+
+
+def _write_state(state: dict[str, Any]) -> None:
+    state_dir = _private_state_directory()
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=state_dir, delete=False
+    ) as stream:
+        temporary = Path(stream.name)
+        try:
+            os.fchmod(stream.fileno(), 0o600)
+            json.dump(state, stream, ensure_ascii=False)
+            stream.close()
+            temporary.replace(STATE_PATH)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def _state() -> dict[str, Any]:
+    _private_state_directory()
+    try:
+        STATE_PATH.chmod(0o600)
+    except FileNotFoundError:
+        pass
     state = _read_json(STATE_PATH, {})
     if not isinstance(state, dict):
         raise CompanionError("Plugin state is invalid. Remove its state file and retry.")

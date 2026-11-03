@@ -1,5 +1,7 @@
 import datetime as dt
 import json
+import os
+import stat
 import sys
 import tempfile
 import unittest
@@ -31,6 +33,33 @@ class CompanionTests(unittest.TestCase):
 
     def run_action(self, action, **values):
         return companion._handle({"action": action, "vault": self.root_argument, **values})
+
+    def test_state_saves_are_private_with_permissive_umask(self):
+        self.state_path = Path(self.temp.name) / "private-state" / "state.json"
+        companion.STATE_PATH = self.state_path
+        previous_umask = os.umask(0o022)
+        try:
+            for value in ("first save", "replacement save"):
+                companion._write_state({"vault": value})
+                self.assertEqual(stat.S_IMODE(self.state_path.stat().st_mode), 0o600)
+                self.assertEqual(stat.S_IMODE(self.state_path.parent.stat().st_mode), 0o700)
+                self.assertEqual(json.loads(self.state_path.read_text()), {"vault": value})
+                self.assertEqual(list(self.state_path.parent.iterdir()), [self.state_path])
+        finally:
+            os.umask(previous_umask)
+
+    def test_loading_existing_state_repairs_permissions_without_changing_data(self):
+        self.state_path = Path(self.temp.name) / "existing-state" / "state.json"
+        companion.STATE_PATH = self.state_path
+        self.state_path.parent.mkdir()
+        self.state_path.write_text('{"vault": "existing vault"}', encoding="utf-8")
+        self.state_path.parent.chmod(0o755)
+        self.state_path.chmod(0o644)
+        original = self.state_path.read_bytes()
+        self.assertEqual(companion._state()["vault"], "existing vault")
+        self.assertEqual(stat.S_IMODE(self.state_path.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(self.state_path.parent.stat().st_mode), 0o700)
+        self.assertEqual(self.state_path.read_bytes(), original)
 
     def test_search_skips_obsidian_metadata_and_returns_matching_preview(self):
         (self.root / "note.md").write_text("# Project\nA useful phrase here.\n", encoding="utf-8")
