@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "kel.obsidian-companion",
+  "name": "Obsidian Companion",
+  "version": "0.1.0",
+  "author": "kelmankenberg",
+  "license": "MIT",
+  "description": "Quick access to search, daily notes, capture, tasks, and recent Obsidian notes.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Obsidian",
+    "category": "Productivity",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
