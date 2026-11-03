@@ -50,6 +50,16 @@ omarchy bar move kel.obsidian-companion --section center
 omarchy bar move kel.obsidian-companion --section right
 ```
 
+## Remove
+
+```sh
+omarchy plugin remove kel.obsidian-companion
+rm -rf ~/.local/state/obsidian-companion   # optional: pinned notes, recent history, settings
+```
+
+Removing the plugin never touches your vaults. Notes and tasks you created or
+captured stay in Obsidian.
+
 ## Use
 
 Click the Obsidian icon. The plugin detects vaults from Obsidian's local
