@@ -310,9 +310,7 @@ Panel {
       refreshCurrentView()
     } else if (action === "ai_prompt") {
       aiQuestion = ""
-      notice = response.message || "Opening your configured Omarchy agent."
-      agentProcess.command = ["omarchy", "agent", "prompt", response.prompt]
-      agentProcess.running = true
+      notice = response.message
     } else if (action === "set_reminders") {
       reminderMode = response.reminderMode || "off"
       reminderTime = response.reminderTime || "09:00"
@@ -450,17 +448,6 @@ Panel {
       Qt.callLater(function() {
         root.finishProcess(exitCode, String(helperOutput.text || ""), String(helperError.text || ""))
       })
-    }
-  }
-
-  Process {
-    id: agentProcess
-    stdout: StdioCollector {}
-    stderr: StdioCollector {}
-    onExited: function(exitCode) {
-      if (exitCode !== 0) {
-        root.errorMessage = "Could not launch the configured Omarchy agent."
-      }
     }
   }
 
@@ -983,7 +970,7 @@ Panel {
                 id: aiQuestionField
                 Layout.fillWidth: true
                 placeholderText: root.selectedPath
-                  ? "Ask your configured AI about this note"
+                  ? "Write a question about this note"
                   : "Select a note, then ask a question"
                 text: root.aiQuestion
                 enabled: !root.busy
@@ -1005,8 +992,8 @@ Panel {
                 tooltipText: "Fill in a saved question (manage presets in Settings)"
               }
               Button {
-                text: "Ask AI"
-                tooltipText: "Send the selected note and your question to your Omarchy agent"
+                text: "Copy AI prompt"
+                tooltipText: "Copy the selected note and question; paste them into your AI agent"
                 bordered: true
                 enabled: !!root.selectedPath && !!root.aiQuestion.trim() && !root.busy
                 onClicked: root.askAgent()
@@ -1014,7 +1001,7 @@ Panel {
             }
             Text {
               width: parent.width
-              text: "AI actions send the selected note's text to your configured Omarchy agent. The prompt asks it not to modify files."
+              text: "Copying puts the note and question on your clipboard. Other apps or clipboard managers may read or retain it. Paste it into your AI agent."
               color: Color.popups.text
               opacity: 0.68
               font.family: root.bar ? root.bar.fontFamily : Style.font.family

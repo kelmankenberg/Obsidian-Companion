@@ -2,6 +2,7 @@ import datetime as dt
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -209,10 +210,42 @@ class CompanionTests(unittest.TestCase):
     def test_ai_handoff_is_explicit_and_does_not_change_the_note(self):
         path = self.root / "note.md"
         path.write_text("A private project note.", encoding="utf-8")
-        response = self.run_action("ai_prompt", path="note.md", question="Summarize this")
-        self.assertIn("A private project note.", response["prompt"])
-        self.assertIn("Do not edit", response["prompt"])
+        with patch.object(companion.subprocess, "run") as copy:
+            response = self.run_action("ai_prompt", path="note.md", question="Summarize this")
+        args, kwargs = copy.call_args
+        self.assertEqual(args[0], ["wl-copy", "--sensitive"])
+        self.assertIn("A private project note.", kwargs["input"])
+        self.assertIn("Summarize this", kwargs["input"])
+        self.assertIn("Do not edit", kwargs["input"])
+        self.assertNotIn("prompt", response)
         self.assertEqual(path.read_text(encoding="utf-8"), "A private project note.")
+
+    def test_ai_clipboard_failure_is_reported(self):
+        (self.root / "note.md").write_text("Private note", encoding="utf-8")
+        with patch.object(companion.subprocess, "run", side_effect=subprocess.TimeoutExpired("wl-copy", 10)):
+            with self.assertRaisesRegex(companion.CompanionError, "Could not copy"):
+                self.run_action("ai_prompt", path="note.md", question="Summarize")
+
+    def test_ai_clipboard_process_receives_prompt_only_on_stdin(self):
+        (self.root / "note.md").write_text("Private test note", encoding="utf-8")
+        bin_dir = Path(self.temp.name) / "bin"
+        bin_dir.mkdir()
+        capture = Path(self.temp.name) / "capture.json"
+        copy = bin_dir / "wl-copy"
+        copy.write_text(
+            "#!" + sys.executable + "\n"
+            "import json, sys\n"
+            f"with open({str(capture)!r}, 'w') as f:\n"
+            "    json.dump({'args': sys.argv[1:], 'text': sys.stdin.read()}, f)\n",
+            encoding="utf-8",
+        )
+        copy.chmod(0o700)
+        with patch.dict(os.environ, {"PATH": str(bin_dir)}):
+            self.run_action("ai_prompt", path="note.md", question="Private test question")
+        received = json.loads(capture.read_text(encoding="utf-8"))
+        self.assertEqual(received["args"], ["--sensitive"])
+        self.assertIn("Private test note", received["text"])
+        self.assertIn("Private test question", received["text"])
 
 
     def test_excluded_folders_are_skipped_by_search_and_tasks(self):

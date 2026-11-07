@@ -2,7 +2,7 @@
 
 An Omarchy bar widget for everyday Obsidian vault access: search, recent and
 pinned notes, daily notes, quick capture, note creation, open tasks, and an
-explicit handoff to Omarchy's configured AI agent.
+an explicit AI prompt you can copy into your preferred agent.
 
 The plugin is an independent community project and is not affiliated with
 Obsidian or Omarchy.
@@ -24,16 +24,17 @@ Obsidian or Omarchy.
   them done.
 - Choose optional daily task summaries or alerts for due/overdue Obsidian
   Tasks items, with a configurable local time.
-- Ask the configured Omarchy agent a question about a selected note. Click a
-  note in Search, Recent, or Pinned to select it; use **Open** (or double-click)
-  to open it in Obsidian.
+- Prepare an AI question about a selected note. Click a note in Search, Recent,
+  or Pinned to select it, then use **Copy AI prompt** and paste it into your
+  agent. Use **Open** (or double-click) to open the note in Obsidian.
 
-The AI handoff is an explicit action. It sends the selected note text (up to
-30,000 characters) and the user's question to `omarchy agent prompt`; the
-generated prompt asks the agent not to change files, but that instruction is
-not a sandbox. Agent providers may process the note according to their own
-service and privacy terms. The prompt is passed to the agent CLI as a command
-argument and may be visible to local process inspection tools while it runs.
+Copying is explicit: the prompt contains up to 30,000 characters of the note
+and your question. It is sent to `wl-copy` via standard input, not process
+arguments, with a sensitive-clipboard hint. Other applications or clipboard
+managers may still read or retain clipboard contents; clear it when finished.
+The generated prompt asks the agent not to change files, but that instruction
+is not a sandbox. Agent providers may process the note according to their own
+service and privacy terms.
 
 ## Install
 
@@ -80,8 +81,8 @@ Note titles and previews are displayed as plain text, never rendered as HTML.
 
 Search, capture, and vault operations are local; no
 search index, background service, or plugin-initiated network request is
-created. AI handoff invokes the configured agent, which may send the selected
-note to its provider.
+created. When you paste an AI prompt into an agent, that agent may send the
+selected note to its provider.
 
 Reminder settings are per vault and off by default. Due-date alerts recognize
 the Obsidian Tasks `📅 YYYY-MM-DD` marker; they notify once at the chosen time

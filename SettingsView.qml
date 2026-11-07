@@ -490,7 +490,7 @@ Item {
       Toggle {
         width: body.width
         label: "Show Ask AI"
-        description: "Sends the selected note to your configured Omarchy agent only when you click Ask AI."
+        description: "Shows a control to copy a selected note and question for your AI agent."
         fontFamily: settings.fontFamily
         titleSize: Style.font.body
         checked: settings.aiEnabled

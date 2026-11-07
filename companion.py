@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import urllib.parse
@@ -882,7 +883,19 @@ def _handle(request: dict[str, Any]) -> dict[str, Any]:
             f"{content}\n"
             "---"
         )
-        return {"ok": True, "prompt": prompt, "message": "Sending the selected note to your configured Omarchy agent."}
+        try:
+            subprocess.run(
+                ["wl-copy", "--sensitive"],
+                input=prompt,
+                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                check=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise CompanionError("Could not copy the AI prompt to the clipboard.") from error
+        return {"ok": True, "message": "Prompt copied. Paste it into your AI agent."}
     raise CompanionError(f"Unknown action: {action or '(empty)'}")
 
 
