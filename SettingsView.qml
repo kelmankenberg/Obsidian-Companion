@@ -29,6 +29,7 @@ Item {
   property bool badgeDue: true
   property bool badgeChanges: true
   property bool badgeDaily: true
+  property string badgeIntervalMinutes: "1"
   property string category: "vaults"
   property string reminderMode: "off"
   property string reminderTime: "09:00"
@@ -59,6 +60,7 @@ Item {
     badgeDue = vault.badgeDue !== false
     badgeChanges = vault.badgeChanges !== false
     badgeDaily = vault.badgeDaily !== false
+    badgeIntervalMinutes = String(vault.badgeIntervalMinutes || 1)
     reminderMode = panel.reminderMode || "off"
     reminderTime = panel.reminderTime || "09:00"
     defaultTab = ui.defaultTab || "search"
@@ -92,7 +94,8 @@ Item {
         includeObsidianRecent: includeObsidianRecent,
         badgeDue: badgeDue,
         badgeChanges: badgeChanges,
-        badgeDaily: badgeDaily
+        badgeDaily: badgeDaily,
+        badgeIntervalMinutes: Number(badgeIntervalMinutes)
       },
       reminders: { mode: reminderMode, time: reminderTime },
       ui: { defaultTab: defaultTab, aiEnabled: aiEnabled, aiPresets: presets }
@@ -536,7 +539,24 @@ Item {
       PanelSectionHeader { text: "Activity badge"; fontFamily: settings.fontFamily }
       Hint {
         width: body.width
-        text: "Counts are checked every minute for the current vault. Note changes clear when you open Companion; other items remain until resolved."
+        text: "Counts are checked periodically for the current vault. Note changes clear when you open Companion; other items remain until resolved."
+      }
+      Choice {
+        width: body.width
+        label: "Check frequency"
+        tooltipText: "How often to check the current vault for activity"
+        fontFamily: settings.fontFamily
+        options: [
+          { value: "1", label: "Every minute" },
+          { value: "5", label: "Every 5 minutes" },
+          { value: "10", label: "Every 10 minutes" },
+          { value: "15", label: "Every 15 minutes" },
+          { value: "30", label: "Every 30 minutes" },
+          { value: "60", label: "Every hour" },
+          { value: "90", label: "Every 90 minutes" }
+        ]
+        bound: settings.badgeIntervalMinutes
+        onPicked: function(value) { settings.badgeIntervalMinutes = value }
       }
       Toggle {
         width: body.width

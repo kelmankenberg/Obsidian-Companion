@@ -138,6 +138,25 @@ class CompanionTests(unittest.TestCase):
         with self.assertRaisesRegex(companion.CompanionError, "badgeDue must be true or false"):
             self.run_action("save_vault_settings", settings={"badgeDue": "false"})
 
+    def test_activity_check_interval_persists_per_vault(self):
+        self.assertEqual(self.run_action("init")["vaultSettings"]["badgeIntervalMinutes"], 1)
+        for interval in (1, 5, 10, 15, 30, 60, 90):
+            with self.subTest(interval=interval):
+                result = self.run_action("save_vault_settings", settings={"badgeIntervalMinutes": interval})
+                self.assertEqual(result["vaultSettings"]["badgeIntervalMinutes"], interval)
+                self.assertEqual(self.run_action("init")["vaultSettings"]["badgeIntervalMinutes"], interval)
+        other_vault = self.root.parent / "Other"
+        other_vault.mkdir()
+        self.assertEqual(companion._vault_settings(companion._state(), other_vault)["badgeIntervalMinutes"], 1)
+
+    def test_activity_check_interval_rejects_invalid_values(self):
+        self.run_action("save_vault_settings", settings={"badgeIntervalMinutes": 15})
+        for interval in (0, 2, 91, True, "15", None):
+            with self.subTest(interval=interval):
+                with self.assertRaisesRegex(companion.CompanionError, "valid activity check interval"):
+                    self.run_action("save_vault_settings", settings={"badgeIntervalMinutes": interval})
+                self.assertEqual(self.run_action("init")["vaultSettings"]["badgeIntervalMinutes"], 15)
+
     def test_daily_note_uses_vault_daily_notes_settings(self):
         (self.root / ".obsidian" / "daily-notes.json").write_text(
             json.dumps({

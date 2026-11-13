@@ -20,6 +20,7 @@ MAX_NOTE_BYTES = 512 * 1024
 MAX_FILES = 20_000
 MAX_RESULTS = 80
 MAX_REMINDER_TASKS = 10_000
+BADGE_INTERVALS = {1, 5, 10, 15, 30, 60, 90}
 REMINDER_MODES = {"off", "daily_summary", "due_dates"}
 TASK_SORTS = {"file", "due_asc", "due_desc"}
 MAX_TERMS = 12
@@ -451,6 +452,7 @@ def _vault_settings(state: dict[str, Any], root: Path) -> dict[str, Any]:
         "badgeDue": True,
         "badgeChanges": True,
         "badgeDaily": True,
+        "badgeIntervalMinutes": 1,
     }
     for key, default in settings.items():
         value = stored.get(key, default)
@@ -460,6 +462,8 @@ def _vault_settings(state: dict[str, Any], root: Path) -> dict[str, Any]:
         settings["captureFormat"] = "bullet"
     if settings["captureTarget"] not in CAPTURE_TARGETS:
         settings["captureTarget"] = "inbox"
+    if type(settings["badgeIntervalMinutes"]) is not int or settings["badgeIntervalMinutes"] not in BADGE_INTERVALS:
+        settings["badgeIntervalMinutes"] = 1
     settings["excludedFolders"] = [
         str(folder).strip("/") for folder in settings["excludedFolders"] if str(folder).strip("/")
     ][:50]
@@ -514,6 +518,11 @@ def _save_vault_settings(state: dict[str, Any], root: Path, values: Any) -> dict
             if not isinstance(values[key], bool):
                 raise CompanionError(f"{key} must be true or false.")
             settings[key] = values[key]
+    if "badgeIntervalMinutes" in values:
+        interval = values["badgeIntervalMinutes"]
+        if type(interval) is not int or interval not in BADGE_INTERVALS:
+            raise CompanionError("Choose a valid activity check interval.")
+        settings["badgeIntervalMinutes"] = interval
     state["vaultSettings"][str(root)] = settings
     return settings
 

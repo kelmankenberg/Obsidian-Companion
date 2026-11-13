@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0 - 2026-11-13
+
+- Allow configuring activity checks from every minute to every 90 minutes.
+
 ## 0.2.0 - 2026-11-13
 
 - Replace the bar glyph with a purple, faceted-gem icon inspired by Obsidian.

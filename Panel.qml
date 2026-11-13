@@ -62,6 +62,7 @@ Panel {
   property bool activityAcknowledgePending: false
   property bool activityFinishing: false
   readonly property int activityCount: activityChanges + activityDue + (activityDaily ? 1 : 0)
+  readonly property int activityIntervalMinutes: vaultSettings.badgeIntervalMinutes || 1
   readonly property string activitySummary: activityError ? "Activity check failed: " + activityError
     : activityCount > 0 ? activityDue + " due tasks · " + activityChanges
       + " changed notes" + (activityDaily ? " · daily note missing" : "")
@@ -546,7 +547,7 @@ Panel {
   }
 
   Timer {
-    interval: 60000
+    interval: root.activityIntervalMinutes * 60000
     running: root.initialized && !!root.selectedVault
     repeat: true
     onTriggered: root.scheduleActivity()
@@ -1151,6 +1152,7 @@ Panel {
         activityChanges: root.activityChanges,
         activityDaily: root.activityDaily,
         activityError: root.activityError,
+        activityIntervalMinutes: root.activityIntervalMinutes,
         recentCount: root.recent.length,
         visibleCount: displayedNotes.count,
         recentFirst: root.recent.length ? root.recent[0].path : "",

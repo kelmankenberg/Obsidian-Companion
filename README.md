@@ -118,12 +118,15 @@ Vault-specific settings apply to the current vault. Panel and AI settings
 apply to all vaults. `omarchy-shell kel.obsidian-companion settings` opens the
 panel directly on Settings.
 
-The badge checks the selected vault every minute. It counts open tasks due
-today or earlier, new or modified Markdown files, and a missing daily note.
-Excluded folders are ignored for tasks and note changes. Opening Companion
-acknowledges note changes; tasks and the missing daily note remain until
-resolved. Note-change tracking starts with a fresh baseline when the shell
-restarts or the vault changes, and detects changes made by any application.
+The badge checks the selected vault every minute by default; Settings can
+change the interval to 5, 10, 15, 30, 60, or 90 minutes per vault. It also
+checks when Companion opens and after certain actions. It counts open tasks
+due today or earlier, new or modified Markdown files, and a missing daily
+note. Excluded folders are ignored for tasks and note changes. Opening
+Companion acknowledges note changes; tasks and the missing daily note remain
+until resolved. Note-change tracking starts with a fresh baseline when the
+shell restarts or the vault changes, and detects changes made by any
+application.
 
 ## Requirements and permissions
 
