@@ -24,6 +24,8 @@ Obsidian or Omarchy.
   them done.
 - Choose optional daily task summaries or alerts for due/overdue Obsidian
   Tasks items, with a configurable local time.
+- Show an activity count on the bar icon for due tasks, changed notes, and a
+  missing daily note. Configure these independently in Settings.
 - Prepare an AI question about a selected note. Click a note in Search, Recent,
   or Pinned to select it, then use **Copy AI prompt** and paste it into your
   agent. Use **Open** (or double-click) to open the note in Obsidian.
@@ -104,14 +106,24 @@ Vault, bar-position, and history actions apply immediately.
 - **Search and tasks** — folders to exclude (relative to the vault, including
   subfolders).
 - **Task reminders** — off, daily summary, or due-date alerts, and the time.
-- **Panel** — tab shown when the panel opens and bar position.
+- **Panel & badge** — default tab, bar position, and activity badge triggers.
 - **Recent** — include or hide Obsidian's own recent files, and clear the
   notes Companion has recorded (Obsidian's history is never modified).
 - **AI** — show or hide Ask AI and manage preset questions.
+- **Feedback** — open a GitHub form to report a bug or request a feature.
+  The installed version is prefilled. Issues are public; remove private vault
+  information before submitting.
 
 Vault-specific settings apply to the current vault. Panel and AI settings
 apply to all vaults. `omarchy-shell kel.obsidian-companion settings` opens the
 panel directly on Settings.
+
+The badge checks the selected vault every minute. It counts open tasks due
+today or earlier, new or modified Markdown files, and a missing daily note.
+Excluded folders are ignored for tasks and note changes. Opening Companion
+acknowledges note changes; tasks and the missing daily note remain until
+resolved. Note-change tracking starts with a fresh baseline when the shell
+restarts or the vault changes, and detects changes made by any application.
 
 ## Requirements and permissions
 
@@ -128,6 +140,8 @@ before enabling it.
 
 ```sh
 python3 -m unittest discover -s tests
+QT_QPA_PLATFORM=offscreen qml6 tests/test_activity.qml
+QT_QPA_PLATFORM=offscreen qml6 tests/test_feedback.qml
 omarchy plugin validate .
 qmllint -I "$OMARCHY_PATH/shell" -I . BarWidget.qml Panel.qml SettingsView.qml ChipSearchField.qml Choice.qml
 ```

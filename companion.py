@@ -448,6 +448,9 @@ def _vault_settings(state: dict[str, Any], root: Path) -> dict[str, Any]:
         "dailyTemplate": "",
         "excludedFolders": [],
         "includeObsidianRecent": True,
+        "badgeDue": True,
+        "badgeChanges": True,
+        "badgeDaily": True,
     }
     for key, default in settings.items():
         value = stored.get(key, default)
@@ -506,8 +509,37 @@ def _save_vault_settings(state: dict[str, Any], root: Path, values: Any) -> dict
         settings["excludedFolders"] = cleaned
     if "includeObsidianRecent" in values:
         settings["includeObsidianRecent"] = values["includeObsidianRecent"] is True
+    for key in ("badgeDue", "badgeChanges", "badgeDaily"):
+        if key in values:
+            if not isinstance(values[key], bool):
+                raise CompanionError(f"{key} must be true or false.")
+            settings[key] = values[key]
     state["vaultSettings"][str(root)] = settings
     return settings
+
+
+def _activity(root: Path, settings: dict[str, Any]) -> dict[str, Any]:
+    excluded = settings["excludedFolders"]
+    files = {}
+    if settings["badgeChanges"]:
+        for path in _markdown_files(root, excluded):
+            stat = path.stat()
+            files[path.relative_to(root).as_posix()] = f"{stat.st_mtime_ns}:{stat.st_size}"
+
+    due = 0
+    if settings["badgeDue"]:
+        tasks = _tasks(root, MAX_REMINDER_TASKS + 1, excluded)
+        if len(tasks) > MAX_REMINDER_TASKS:
+            raise CompanionError(f"More than {MAX_REMINDER_TASKS} open tasks; exclude folders to use the activity badge.")
+        for task in tasks:
+            try:
+                date = dt.date.fromisoformat(task["due"])
+            except ValueError:
+                continue
+            if date <= dt.date.today():
+                due += 1
+    daily = settings["badgeDaily"] and not _daily_file(root, False, settings).is_file()
+    return {"ok": True, "files": files, "due": due, "daily": daily}
 
 
 def _ui_settings(state: dict[str, Any]) -> dict[str, Any]:
@@ -570,11 +602,22 @@ def _bar_section() -> str:
     return ""
 
 
+def _plugin_version() -> str:
+    manifest = _read_json(Path(__file__).resolve().with_name("manifest.json"), None)
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("version"), str):
+        raise CompanionError("Could not read the plugin version from manifest.json.")
+    version = manifest["version"].strip()
+    if not version:
+        raise CompanionError("The plugin version in manifest.json is empty.")
+    return version
+
+
 def _settings_payload(state: dict[str, Any], selected: str) -> dict[str, Any]:
     root = Path(selected) if selected else None
     reminders = _reminder_settings(state, root) if root else {"mode": "off", "time": "09:00"}
     return {
         "ok": True,
+        "pluginVersion": _plugin_version(),
         "vaults": _vaults(state),
         "selectedVault": selected,
         "templates": _templates(root) if root else [],
@@ -711,6 +754,8 @@ def _handle(request: dict[str, Any]) -> dict[str, Any]:
     vault_settings = _vault_settings(state, root)
     excluded = vault_settings["excludedFolders"]
 
+    if action == "activity":
+        return _activity(root, vault_settings)
     if action == "save_vault_settings":
         _save_vault_settings(state, root, request.get("settings"))
         if "reminders" in request:

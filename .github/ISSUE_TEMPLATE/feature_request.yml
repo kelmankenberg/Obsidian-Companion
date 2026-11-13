@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest an improvement to Obsidian Companion.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues are public. Do not include private notes, vault paths, credentials,
+        or other sensitive information.
+  - type: textarea
+    id: need
+    attributes:
+      label: What would you like to do?
+      description: Describe the problem or workflow you want to improve.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed feature
+      description: Explain what you would like Companion to do.
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Obsidian Companion version
+      description: Find this in the Companion panel header.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Include alternatives or redacted examples if helpful.

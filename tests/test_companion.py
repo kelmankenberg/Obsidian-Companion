@@ -35,6 +35,18 @@ class CompanionTests(unittest.TestCase):
     def run_action(self, action, **values):
         return companion._handle({"action": action, "vault": self.root_argument, **values})
 
+    def test_settings_payload_reads_version_from_installed_manifest(self):
+        manifest_dir = Path(self.temp.name) / "plugin"
+        manifest_dir.mkdir()
+        (manifest_dir / "manifest.json").write_text(
+            json.dumps({"version": "2.3.4-beta"}), encoding="utf-8"
+        )
+        with patch.object(companion, "__file__", str(manifest_dir / "companion.py")):
+            self.assertEqual(self.run_action("init")["pluginVersion"], "2.3.4-beta")
+            (manifest_dir / "manifest.json").write_text('{"version": ""}', encoding="utf-8")
+            with self.assertRaisesRegex(companion.CompanionError, "version.*empty"):
+                self.run_action("init")
+
     def test_state_saves_are_private_with_permissive_umask(self):
         self.state_path = Path(self.temp.name) / "private-state" / "state.json"
         companion.STATE_PATH = self.state_path
@@ -69,6 +81,62 @@ class CompanionTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["path"], "note.md")
         self.assertEqual(results[0]["preview"], "A useful phrase here.")
+
+    def test_activity_counts_due_tasks_and_missing_daily_note(self):
+        today = dt.date.today()
+        yesterday = (today - dt.timedelta(days=1)).isoformat()
+        tomorrow = (today + dt.timedelta(days=1)).isoformat()
+        (self.root / "tasks.md").write_text(
+            f"- [ ] Overdue 📅 {yesterday}\n"
+            f"- [ ] Due today 📅 {today.isoformat()}\n"
+            f"- [ ] Future 📅 {tomorrow}\n"
+            "- [ ] Invalid 📅 2026-99-99\n"
+            f"- [x] Done 📅 {yesterday}\n",
+            encoding="utf-8",
+        )
+        response = self.run_action("activity")
+        self.assertEqual(response["due"], 2)
+        self.assertTrue(response["daily"])
+        self.assertEqual(list(response["files"]), ["tasks.md"])
+        self.assertFalse((self.root / f"{today.isoformat()}.md").exists())
+        (self.root / f"{today.isoformat()}.md").write_text("# Today\n", encoding="utf-8")
+        self.assertFalse(self.run_action("activity")["daily"])
+
+    def test_activity_respects_settings_exclusions_and_daily_override(self):
+        (self.root / "Archive").mkdir()
+        (self.root / "Archive" / "hidden.md").write_text(
+            "- [ ] Hidden 📅 2000-01-01\n", encoding="utf-8"
+        )
+        (self.root / "visible.md").write_text("- [ ] Visible 📅 2000-01-01\n", encoding="utf-8")
+        self.run_action("save_vault_settings", settings={
+            "excludedFolders": ["Archive"],
+            "dailyOverride": True,
+            "dailyFolder": "Journal",
+            "dailyFormat": "YYYY-MM-DD",
+        })
+        (self.root / "Journal").mkdir()
+        (self.root / "Journal" / f"{dt.date.today().isoformat()}.md").write_text("# Today\n")
+        result = self.run_action("activity")
+        self.assertEqual(result["due"], 1)
+        self.assertFalse(result["daily"])
+        self.assertNotIn("Archive/hidden.md", result["files"])
+        first = result["files"]["visible.md"]
+        (self.root / "visible.md").write_text("Changed note content\n")
+        self.assertNotEqual(first, self.run_action("activity")["files"]["visible.md"])
+        self.run_action("save_vault_settings", settings={
+            "badgeDue": False, "badgeChanges": False, "badgeDaily": False,
+        })
+        result = self.run_action("activity")
+        self.assertEqual((result["due"], result["daily"], result["files"]), (0, False, {}))
+        payload = self.run_action("save_vault_settings", settings={"newNoteFolder": "Notes"})
+        self.assertEqual(
+            [payload["vaultSettings"][key] for key in ("badgeDue", "badgeChanges", "badgeDaily")],
+            [False, False, False],
+        )
+
+    def test_activity_rejects_non_boolean_badge_settings(self):
+        with self.assertRaisesRegex(companion.CompanionError, "badgeDue must be true or false"):
+            self.run_action("save_vault_settings", settings={"badgeDue": "false"})
 
     def test_daily_note_uses_vault_daily_notes_settings(self):
         (self.root / ".obsidian" / "daily-notes.json").write_text(

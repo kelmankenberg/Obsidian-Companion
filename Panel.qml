@@ -6,6 +6,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "Activity.js" as Activity
 
 Panel {
   id: root
@@ -37,6 +38,7 @@ Panel {
   property string selectedVault: ""
   property string errorMessage: ""
   property string notice: ""
+  property string pluginVersion: ""
   property string aiQuestion: ""
   property var vaults: []
   property var results: []
@@ -49,7 +51,24 @@ Panel {
   property var queuedPayload: ({})
   property string pendingAction: ""
   property var pendingPayload: ({})
+  property var activityBaseline: null
+  property var activityFiles: ({})
+  property int activityChanges: 0
+  property int activityDue: 0
+  property bool activityDaily: false
+  property string activityError: ""
+  property string activityVault: ""
+  property bool activityRescan: false
+  property bool activityAcknowledgePending: false
+  property bool activityFinishing: false
+  readonly property int activityCount: activityChanges + activityDue + (activityDaily ? 1 : 0)
+  readonly property string activitySummary: activityError ? "Activity check failed: " + activityError
+    : activityCount > 0 ? activityDue + " due tasks · " + activityChanges
+      + " changed notes" + (activityDaily ? " · daily note missing" : "")
+    : "No pending activity"
   readonly property string home: Quickshell.env("HOME")
+
+  Component.onCompleted: request("init", {})
 
   ListModel {
     id: displayedNotes
@@ -147,8 +166,12 @@ Panel {
 
   function open() {
     root.controller.show()
+    if (activityBaseline !== null) activityBaseline = activityFiles
+    activityChanges = 0
+    activityAcknowledgePending = true
+    scheduleActivity()
     if (!initialized) {
-      request("init", {})
+      if (!busy || pendingAction !== "init") request("init", {})
     } else {
       showSettings = false
       changeTab(defaultTab())
@@ -161,6 +184,7 @@ Panel {
   }
 
   function applySettings(response) {
+    pluginVersion = response.pluginVersion || ""
     vaults = response.vaults || []
     selectedVault = response.selectedVault || ""
     templates = response.templates || []
@@ -184,6 +208,49 @@ Panel {
     taskTerms = []
     selectNote(null)
     showItems([])
+    activityBaseline = null
+    activityFiles = ({})
+    activityChanges = 0
+    activityDue = 0
+    activityDaily = false
+    activityAcknowledgePending = false
+  }
+
+  function scheduleActivity() {
+    if (!selectedVault) return
+    if (activityProcess.running || activityFinishing) {
+      activityRescan = true
+      return
+    }
+    activityVault = selectedVault
+    activityProcess.running = true
+  }
+
+  function finishActivity(exitCode, output, errorOutput) {
+    if (activityVault === selectedVault) {
+      var response
+      try {
+        response = JSON.parse(String(output || ""))
+      } catch (error) {
+        response = { ok: false, error: String(errorOutput || "").trim() || "Invalid activity response." }
+      }
+      if (exitCode !== 0 || !response || response.ok !== true) {
+        activityError = response && response.error ? String(response.error) : "Activity check failed."
+      } else {
+        activityError = ""
+        activityFiles = response.files || ({})
+        activityDue = Number(response.due || 0)
+        activityDaily = response.daily === true
+        if (activityBaseline === null || opened || activityAcknowledgePending)
+          activityBaseline = activityFiles
+        activityAcknowledgePending = false
+        activityChanges = Activity.changedCount(activityFiles, activityBaseline)
+      }
+    }
+    if (activityRescan) {
+      activityRescan = false
+      Qt.callLater(root.scheduleActivity)
+    }
   }
 
   function openSettings() {
@@ -260,15 +327,23 @@ Panel {
     if (action === "init") {
       applySettings(response)
       initialized = true
-      changeTab(defaultTab())
+      if (opened) changeTab(defaultTab())
+      scheduleActivity()
     } else if (action === "select_vault" || action === "add_vault" || action === "remove_vault") {
       var changed = (response.selectedVault || "") !== selectedVault
       applySettings(response)
       if (changed) resetVaultData()
+      scheduleActivity()
       if (response.message) notice = response.message
       if (!showSettings) changeTab(activeTab)
     } else if (action === "save_vault_settings" || action === "save_ui_settings") {
+      var previousExclusions = JSON.stringify(vaultSettings.excludedFolders || [])
+      var previousChanges = vaultSettings.badgeChanges !== false
       applySettings(response)
+      if (previousExclusions !== JSON.stringify(vaultSettings.excludedFolders || [])
+          || previousChanges !== (vaultSettings.badgeChanges !== false))
+        activityBaseline = null
+      scheduleActivity()
       notice = response.message || "Settings saved."
     } else if (action === "clear_recent") {
       recent = []
@@ -290,9 +365,11 @@ Panel {
       if (response.uri) Qt.openUrlExternally(response.uri)
       notice = response.message || "Opened in Obsidian."
       refreshCurrentView()
+      scheduleActivity()
     } else if (action === "capture") {
       captureText = ""
       notice = response.message || "Captured."
+      scheduleActivity()
     } else if (action === "pin") {
       notice = response.message || "Updated pinned notes."
       function updatePin(rows) {
@@ -308,6 +385,7 @@ Panel {
     } else if (action === "complete_task") {
       notice = response.message || "Task completed."
       refreshCurrentView()
+      scheduleActivity()
     } else if (action === "ai_prompt") {
       aiQuestion = ""
       notice = response.message
@@ -452,6 +530,29 @@ Panel {
   }
 
   Process {
+    id: activityProcess
+    command: ["python3", root.helperPath()]
+    stdinEnabled: true
+    stdout: StdioCollector { id: activityOutput; waitForEnd: true }
+    stderr: StdioCollector { id: activityStderr; waitForEnd: true }
+    onStarted: activityProcess.write(JSON.stringify({ action: "activity", vault: root.activityVault }) + "\n")
+    onExited: function(exitCode) {
+      root.activityFinishing = true
+      Qt.callLater(function() {
+        root.finishActivity(exitCode, activityOutput.text, activityStderr.text)
+        root.activityFinishing = false
+      })
+    }
+  }
+
+  Timer {
+    interval: 60000
+    running: root.initialized && !!root.selectedVault
+    repeat: true
+    onTriggered: root.scheduleActivity()
+  }
+
+  Process {
     id: notificationProcess
     stdout: StdioCollector {}
     stderr: StdioCollector {}
@@ -547,7 +648,8 @@ Panel {
             Layout.fillWidth: true
             spacing: Style.space(2)
             Text {
-              text: "Obsidian Companion"
+              textFormat: Text.PlainText
+              text: "Obsidian Companion" + (root.pluginVersion ? "  v" + root.pluginVersion : "")
               color: Color.popups.text
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.subtitle
@@ -597,6 +699,17 @@ Panel {
           textFormat: Text.PlainText
           width: parent.width
           text: root.errorMessage
+          color: "#ff8a80"
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.Wrap
+        }
+
+        Text {
+          visible: root.activityError !== ""
+          textFormat: Text.PlainText
+          width: parent.width
+          text: "Activity check failed: " + root.activityError
           color: "#ff8a80"
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.bodySmall
@@ -1027,11 +1140,17 @@ Panel {
       return JSON.stringify({
         opened: root.opened,
         activeTab: root.activeTab,
+        pluginVersion: root.pluginVersion,
         showSettings: root.showSettings,
         selectedVault: root.selectedVault,
         busy: root.busy,
         pendingAction: root.pendingAction,
         queuedAction: root.queuedAction,
+        activityCount: root.activityCount,
+        activityDue: root.activityDue,
+        activityChanges: root.activityChanges,
+        activityDaily: root.activityDaily,
+        activityError: root.activityError,
         recentCount: root.recent.length,
         visibleCount: displayedNotes.count,
         recentFirst: root.recent.length ? root.recent[0].path : "",

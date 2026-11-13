@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import qs.Commons
 import qs.Ui
+import "Feedback.js" as Feedback
 
 // Settings page for Obsidian Companion. Edits a draft copy of the panel's
 // settings and saves them in one request; vault, bar, and history actions
@@ -25,6 +26,10 @@ Item {
   property var excludedFolders: []
   property string excludeText: ""
   property bool includeObsidianRecent: true
+  property bool badgeDue: true
+  property bool badgeChanges: true
+  property bool badgeDaily: true
+  property string category: "vaults"
   property string reminderMode: "off"
   property string reminderTime: "09:00"
   property string defaultTab: "search"
@@ -33,7 +38,7 @@ Item {
   property string presetText: ""
 
   implicitHeight: header.implicitHeight + Style.space(8)
-    + Math.min(Style.space(520), body.implicitHeight)
+    + Math.min(Style.space(520), Math.max(sidebar.implicitHeight, body.implicitHeight))
 
   function load() {
     if (!panel) return
@@ -51,6 +56,9 @@ Item {
     excludedFolders = (vault.excludedFolders || []).slice()
     excludeText = ""
     includeObsidianRecent = vault.includeObsidianRecent !== false
+    badgeDue = vault.badgeDue !== false
+    badgeChanges = vault.badgeChanges !== false
+    badgeDaily = vault.badgeDaily !== false
     reminderMode = panel.reminderMode || "off"
     reminderTime = panel.reminderTime || "09:00"
     defaultTab = ui.defaultTab || "search"
@@ -81,7 +89,10 @@ Item {
         dailyFormat: dailyFormat,
         dailyTemplate: dailyTemplate,
         excludedFolders: folders,
-        includeObsidianRecent: includeObsidianRecent
+        includeObsidianRecent: includeObsidianRecent,
+        badgeDue: badgeDue,
+        badgeChanges: badgeChanges,
+        badgeDaily: badgeDaily
       },
       reminders: { mode: reminderMode, time: reminderTime },
       ui: { defaultTab: defaultTab, aiEnabled: aiEnabled, aiPresets: presets }
@@ -93,6 +104,15 @@ Item {
     return [{ value: "", label: "No template" }].concat(templates.map(function(template) {
       return { value: template.path, label: template.name }
     }))
+  }
+
+  function openFeedback(template) {
+    if (!panel.pluginVersion) {
+      panel.errorMessage = "The plugin version is unavailable. Reopen Companion and try again."
+      return
+    }
+    if (!Qt.openUrlExternally(Feedback.issueUrl(template, panel.pluginVersion)))
+      panel.errorMessage = "Could not open the feedback form in your browser."
   }
 
   function sectionOf(section) {
@@ -177,12 +197,47 @@ Item {
     }
   }
 
-  Flickable {
-    id: scroller
+  RowLayout {
+    id: contentRow
     anchors.top: header.bottom
     anchors.topMargin: Style.space(8)
     width: parent.width
-    height: Math.min(Style.space(520), body.implicitHeight)
+    height: Math.min(Style.space(520), Math.max(sidebar.implicitHeight, body.implicitHeight))
+    spacing: Style.space(10)
+
+    Column {
+      id: sidebar
+      Layout.preferredWidth: Style.space(120)
+      Layout.alignment: Qt.AlignTop
+      spacing: Style.space(4)
+      Repeater {
+        model: [
+          { id: "vaults", label: "Vaults" },
+          { id: "notes", label: "Notes" },
+          { id: "tasks", label: "Tasks & search" },
+          { id: "panel", label: "Panel & badge" },
+          { id: "recent", label: "Recent" },
+          { id: "ai", label: "AI" },
+          { id: "feedback", label: "Feedback" }
+        ]
+        delegate: Button {
+          required property var modelData
+          width: sidebar.width
+          text: modelData.label
+          selected: settings.category === modelData.id
+          tooltipText: "Show " + modelData.label + " settings"
+          onClicked: {
+            settings.category = modelData.id
+            scroller.contentY = 0
+          }
+        }
+      }
+    }
+
+  Flickable {
+    id: scroller
+    Layout.fillWidth: true
+    Layout.fillHeight: true
     contentHeight: body.implicitHeight
     clip: true
     boundsBehavior: Flickable.StopAtBounds
@@ -193,7 +248,10 @@ Item {
       width: scroller.width - Style.space(12)
       spacing: Style.space(10)
 
-      // Vaults
+      Column {
+      visible: settings.category === "vaults"
+      width: body.width
+      spacing: Style.space(10)
       PanelSectionHeader { text: "Vaults"; fontFamily: settings.fontFamily }
       Repeater {
         model: settings.panel ? settings.panel.vaults : []
@@ -251,8 +309,12 @@ Item {
         width: body.width
         text: "Vaults registered in Obsidian appear automatically. Settings below apply to the current vault."
       }
+      }
 
-      // New notes
+      Column {
+      visible: settings.category === "notes"
+      width: body.width
+      spacing: Style.space(10)
       PanelSectionHeader { text: "New notes"; fontFamily: settings.fontFamily }
       RowLayout {
         width: body.width
@@ -276,7 +338,6 @@ Item {
         }
       }
 
-      // Capture
       PanelSectionHeader { text: "Quick capture"; fontFamily: settings.fontFamily }
       LabeledField {
         width: body.width
@@ -316,7 +377,6 @@ Item {
         }
       }
 
-      // Daily notes
       PanelSectionHeader { text: "Daily notes"; fontFamily: settings.fontFamily }
       Toggle {
         width: body.width
@@ -361,8 +421,12 @@ Item {
           onPicked: function(value) { settings.dailyTemplate = value }
         }
       }
+      }
 
-      // Exclusions
+      Column {
+      visible: settings.category === "tasks"
+      width: body.width
+      spacing: Style.space(10)
       PanelSectionHeader { text: "Search and tasks"; fontFamily: settings.fontFamily }
       Caption { text: "Excluded folders" }
       ChipSearchField {
@@ -392,7 +456,6 @@ Item {
         text: "Folder paths are relative to the vault, e.g. Templates or Archive/2024. Subfolders are excluded too."
       }
 
-      // Reminders
       PanelSectionHeader { text: "Task reminders"; fontFamily: settings.fontFamily }
       RowLayout {
         width: body.width
@@ -426,8 +489,12 @@ Item {
           ? "Alerts use Obsidian Tasks dates (📅 YYYY-MM-DD), once at this time on or after the due date."
           : "Counts open tasks once a day at this time."
       }
+      }
 
-      // Panel
+      Column {
+      visible: settings.category === "panel"
+      width: body.width
+      spacing: Style.space(10)
       PanelSectionHeader { text: "Panel"; fontFamily: settings.fontFamily }
       Choice {
         width: body.width
@@ -466,7 +533,44 @@ Item {
         }
       }
 
-      // Recent
+      PanelSectionHeader { text: "Activity badge"; fontFamily: settings.fontFamily }
+      Hint {
+        width: body.width
+        text: "Counts are checked every minute for the current vault. Note changes clear when you open Companion; other items remain until resolved."
+      }
+      Toggle {
+        width: body.width
+        label: "Due or overdue tasks"
+        description: "Count open tasks with a 📅 due date of today or earlier."
+        fontFamily: settings.fontFamily
+        titleSize: Style.font.body
+        checked: settings.badgeDue
+        onClicked: settings.badgeDue = !settings.badgeDue
+      }
+      Toggle {
+        width: body.width
+        label: "New or changed notes"
+        description: "Count Markdown files changed since you last opened Companion."
+        fontFamily: settings.fontFamily
+        titleSize: Style.font.body
+        checked: settings.badgeChanges
+        onClicked: settings.badgeChanges = !settings.badgeChanges
+      }
+      Toggle {
+        width: body.width
+        label: "Missing daily note"
+        description: "Add one when today's daily note does not exist."
+        fontFamily: settings.fontFamily
+        titleSize: Style.font.body
+        checked: settings.badgeDaily
+        onClicked: settings.badgeDaily = !settings.badgeDaily
+      }
+      }
+
+      Column {
+      visible: settings.category === "recent"
+      width: body.width
+      spacing: Style.space(10)
       PanelSectionHeader { text: "Recent"; fontFamily: settings.fontFamily }
       Toggle {
         width: body.width
@@ -484,8 +588,12 @@ Item {
         enabled: !!settings.panel.selectedVault && !settings.panel.busy
         onClicked: settings.panel.request("clear_recent", { vault: settings.panel.selectedVault })
       }
+      }
 
-      // AI
+      Column {
+      visible: settings.category === "ai"
+      width: body.width
+      spacing: Style.space(10)
       PanelSectionHeader { text: "AI"; fontFamily: settings.fontFamily }
       Toggle {
         width: body.width
@@ -553,8 +661,37 @@ Item {
           }
         }
       }
+      }
+
+      Column {
+        visible: settings.category === "feedback"
+        width: body.width
+        spacing: Style.space(10)
+        PanelSectionHeader { text: "Feedback"; fontFamily: settings.fontFamily }
+        Hint {
+          width: body.width
+          text: "Open a GitHub form to report a problem or suggest an improvement. GitHub issues are public; do not include private vault content or credentials."
+        }
+        Button {
+          text: "Report a bug"
+          tooltipText: "Open the public bug report form on GitHub"
+          bordered: true
+          onClicked: settings.openFeedback("bug_report.yml")
+        }
+        Button {
+          text: "Request a feature"
+          tooltipText: "Open the public feature request form on GitHub"
+          bordered: true
+          onClicked: settings.openFeedback("feature_request.yml")
+        }
+        Hint {
+          width: body.width
+          text: "The form includes your plugin version. Nothing is submitted until you choose to submit it."
+        }
+      }
 
       Item { width: 1; height: Style.space(4) }
     }
+  }
   }
 }

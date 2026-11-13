@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import qs.Commons
 import qs.Ui
 
 BarWidget {
@@ -12,6 +13,7 @@ BarWidget {
   readonly property bool popoutSwitchClosing: panelLoader.item
     ? panelLoader.item.popoutSwitchClosing === true
     : false
+  readonly property int activityCount: panelLoader.item ? panelLoader.item.activityCount : 0
 
   function open() {
     if (panelLoader.item) panelLoader.item.open()
@@ -56,10 +58,47 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "󰠮"
-    tooltipText: "Open Obsidian Companion"
+    labelVisible: false
+    hasVisualContent: true
+    fixedWidth: root.vertical ? root.barSize : Style.bar.iconSlot
+    fixedHeight: root.vertical ? Style.bar.iconSlot : root.barSize
+    tooltipText: "Obsidian Companion · " + (panelLoader.item
+      ? panelLoader.item.activitySummary : "Loading activity")
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.LeftButton) root.toggle()
+    }
+
+    Image {
+      anchors.centerIn: parent
+      width: Style.bar.iconCanvas
+      height: width
+      source: Qt.resolvedUrl("icon.svg")
+      sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
+      sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
+      fillMode: Image.PreserveAspectFit
+      scale: button.pressScale
+    }
+
+    Rectangle {
+      visible: root.activityCount > 0
+      anchors.top: parent.top
+      anchors.right: parent.right
+      width: Math.max(Style.space(13), badgeLabel.implicitWidth + Style.space(4))
+      height: Style.space(13)
+      radius: height / 2
+      color: Color.urgent
+      border.color: Color.popups.background
+      border.width: 1
+      Text {
+        id: badgeLabel
+        anchors.centerIn: parent
+        textFormat: Text.PlainText
+        text: root.activityCount > 99 ? "99+" : String(root.activityCount)
+        color: "white"
+        font.family: button.fontFamily
+        font.pixelSize: Style.space(9)
+        font.bold: true
+      }
     }
   }
 }
