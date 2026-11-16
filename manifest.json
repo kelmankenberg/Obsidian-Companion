@@ -3,7 +3,7 @@
   "id": "kel.obsidian-companion",
   "name": "Obsidian Companion",
   "icon": "icon.svg",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": "kelmankenberg",
   "license": "MIT",
   "description": "Quick access to search, daily notes, capture, tasks, and recent Obsidian notes.",

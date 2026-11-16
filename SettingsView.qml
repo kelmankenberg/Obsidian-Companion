@@ -159,7 +159,7 @@ Item {
     signal edited(string value)
     spacing: Style.spacing.labelGap
     Caption { text: field.label }
-    TextField {
+    SafeTextField {
       width: field.width
       text: field.value
       placeholderText: field.placeholder
@@ -660,14 +660,14 @@ Item {
         RowLayout {
           width: body.width
           spacing: Style.space(8)
-          TextField {
+          SafeTextField {
             id: presetField
             Layout.fillWidth: true
             placeholderText: "Add a preset question"
             text: settings.presetText
             enabled: settings.aiPresets.length < 10
             onTextEdited: settings.presetText = text
-            Keys.onReturnPressed: addPreset.clicked()
+            onAccepted: addPreset.clicked()
           }
           Button {
             id: addPreset

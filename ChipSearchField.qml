@@ -115,41 +115,52 @@ BorderSurface {
         }
       }
 
-      TextInput {
-        id: input
+      InputViewport {
+        id: inputViewport
+        editor: input
         readonly property real _remaining: flow.width - flow._usedOnLastLine
         width: _remaining >= Style.space(140) ? _remaining : flow.width
-        height: Math.max(implicitHeight, Style.space(24))
-        verticalAlignment: TextInput.AlignVCenter
-        text: root.text
-        enabled: root.inputEnabled
-        clip: true
-        color: root.foreground
-        selectionColor: Style.selectionFillFor(root.foreground, root.accent)
-        selectedTextColor: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
-        onTextEdited: root.edited(text)
-        Keys.onReturnPressed: root.accepted()
-        Keys.onEnterPressed: root.accepted()
-        Keys.onPressed: function(event) {
-          if (event.key === Qt.Key_Backspace && text === "" && root.terms.length) {
-            root.removeRequested(root.terms.length - 1)
-            event.accepted = true
-          } else if (event.key === Qt.Key_Escape && (text !== "" || root.terms.length)) {
-            root.clearRequested()
-            event.accepted = true
+        height: Math.max(input.implicitHeight, Style.space(24))
+        SafeTextEdit {
+          id: input
+          width: inputViewport.width
+          height: inputViewport.height
+          text: root.text
+          enabled: root.inputEnabled
+          color: root.foreground
+          selectionColor: Style.selectionFillFor(root.foreground, root.accent)
+          selectedTextColor: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          onTextEdited: root.edited(text)
+          ClipboardPaste { editor: input }
+          Keys.onReturnPressed: root.accepted()
+          Keys.onEnterPressed: root.accepted()
+          onUnhandledKey: function(event) {
+            if (event.key === Qt.Key_Backspace && text === "" && root.terms.length) {
+              root.removeRequested(root.terms.length - 1)
+              event.accepted = true
+            } else if (event.key === Qt.Key_Escape && (text !== "" || root.terms.length)) {
+              root.clearRequested()
+              event.accepted = true
+            }
           }
-        }
 
-        Text {
-          anchors.fill: parent
-          verticalAlignment: Text.AlignVCenter
-          visible: input.text === "" && !input.preeditText
-          text: root.terms.length ? root.morePlaceholderText : root.placeholderText
-          color: Qt.darker(root.foreground, 1.6)
-          font: input.font
-          elide: Text.ElideRight
+          PanelToolTip {
+            visible: input.pasteError !== "" && input.activeFocus
+            text: input.pasteError
+            fontFamily: root.fontFamily
+          }
+
+          Text {
+            anchors.fill: parent
+            verticalAlignment: Text.AlignVCenter
+            visible: input.text === "" && !input.preeditText
+            text: root.terms.length ? root.morePlaceholderText : root.placeholderText
+            color: Qt.darker(root.foreground, 1.6)
+            font: input.font
+            elide: Text.ElideRight
+          }
         }
       }
 
@@ -158,7 +169,7 @@ BorderSurface {
         var used = 0
         for (var i = 0; i < children.length; i++) {
           var item = children[i]
-          if (item === input || !item.visible || item.width <= 0) continue
+          if (item === inputViewport || !item.visible || item.width <= 0) continue
           if (item.y !== lastChipY) continue
           used += item.width + spacing
         }
@@ -168,7 +179,7 @@ BorderSurface {
         var y = 0
         for (var i = 0; i < children.length; i++) {
           var item = children[i]
-          if (item !== input && item.visible && item.width > 0) y = Math.max(y, item.y)
+          if (item !== inputViewport && item.visible && item.width > 0) y = Math.max(y, item.y)
         }
         return y
       }

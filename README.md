@@ -132,6 +132,7 @@ application.
 
 - Omarchy Quattro with the Quickshell shell and plugin CLI.
 - Python 3.
+- `wl-clipboard` (`wl-copy` for AI prompt copying and `wl-paste` for pasting).
 - Obsidian, for opening notes through `obsidian://` links.
 
 Plugins run unsandboxed inside the Omarchy shell with your user permissions.
@@ -139,14 +140,33 @@ This plugin reads Markdown notes under the selected vault and writes only for
 the explicit create, capture, and task-completion actions. Review the source
 before enabling it.
 
+Text fields do not read clipboard payloads just because the clipboard changes.
+Use Ctrl+V or Shift+Insert to paste. Explicit pastes run in a separate helper
+with a 16 KiB limit and a two-second timeout; failures appear by the field.
+Multiline clipboard text is flattened to a single line. Native middle-click
+paste is disabled.
+
 ## Development
 
 ```sh
 python3 -m unittest discover -s tests
 QT_QPA_PLATFORM=offscreen qml6 tests/test_activity.qml
 QT_QPA_PLATFORM=offscreen qml6 tests/test_feedback.qml
+QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/tst_safe_input.qml
 omarchy plugin validate .
-qmllint -I "$OMARCHY_PATH/shell" -I . BarWidget.qml Panel.qml SettingsView.qml ChipSearchField.qml Choice.qml
+qmllint -I "$OMARCHY_PATH/shell" -I . BarWidget.qml Panel.qml SettingsView.qml ChipSearchField.qml Choice.qml SafeTextEdit.qml SafeTextField.qml ClipboardPaste.qml InputViewport.qml
+```
+
+The Python suite includes an offscreen Quickshell paste integration test using
+a fictional clipboard provider. With Qt development headers and `pkg-config`,
+the native clipboard-offer regression can also be run:
+
+```sh
+build_dir=$(mktemp -d)
+c++ -std=c++17 tests/test_clipboard_offer.cpp -o "$build_dir/clipboard-offer-test" $(pkg-config --cflags --libs Qt6Quick Qt6Gui Qt6Qml)
+QT_QPA_PLATFORM=offscreen "$build_dir/clipboard-offer-test" "$PWD/SafeTextEdit.qml"
+rm "$build_dir/clipboard-offer-test"
+rmdir "$build_dir"
 ```
 
 To try local changes, copy the plugin into

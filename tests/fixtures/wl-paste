@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+import sys
+
+if sys.argv[1:] != ["--no-newline", "--type", "text"]:
+    raise SystemExit(1)
+sys.stdout.write("<b>clipboard fixture</b>\nsecond line")

@@ -807,14 +807,14 @@ Panel {
             spacing: Style.space(6)
             RowLayout {
               width: parent.width
-              TextField {
+              SafeTextField {
                 id: titleField
                 Layout.fillWidth: true
                 placeholderText: "New note title"
                 text: root.noteTitle
                 enabled: !!root.selectedVault && !root.busy
                 onTextEdited: root.noteTitle = text
-                Keys.onReturnPressed: root.createNote()
+                onAccepted: root.createNote()
               }
               Button {
                 text: "Create"
@@ -825,7 +825,7 @@ Panel {
             }
             RowLayout {
               width: parent.width
-              TextField {
+              SafeTextField {
                 Layout.fillWidth: true
                 placeholderText: "Folder in vault"
                 PanelToolTip {
@@ -849,14 +849,14 @@ Panel {
                 onPicked: function(value) { root.createTemplate = value }
               }
             }
-            TextField {
+            SafeTextField {
               id: captureField
               width: parent.width
               placeholderText: "Quick capture (Enter saves to " + (root.vaultSettings.captureTarget === "daily" ? "today's daily note" : "inbox") + ")"
               text: root.captureText
               enabled: !!root.selectedVault && !root.busy
               onTextEdited: root.captureText = text
-              Keys.onReturnPressed: root.capture("")
+              onAccepted: root.capture("")
             }
             RowLayout {
               width: parent.width
@@ -1080,7 +1080,7 @@ Panel {
             RowLayout {
               width: parent.width
               spacing: Style.space(6)
-              TextField {
+              SafeTextField {
                 id: aiQuestionField
                 Layout.fillWidth: true
                 placeholderText: root.selectedPath
@@ -1089,8 +1089,7 @@ Panel {
                 text: root.aiQuestion
                 enabled: !root.busy
                 onTextEdited: root.aiQuestion = text
-                Keys.onReturnPressed: root.askAgent()
-                Keys.onEnterPressed: root.askAgent()
+                onAccepted: root.askAgent()
               }
               Choice {
                 visible: (root.uiSettings.aiPresets || []).length > 0
