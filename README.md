@@ -24,8 +24,8 @@ Obsidian or Omarchy.
 - Create a note in a chosen folder, optionally from a vault template.
 - Review unchecked Markdown tasks, filter them by text or note path (using the
   same removable term chips as Search) and by due-date category, sort by due
-  date (ascending or descending; undated tasks last), and explicitly mark them
-  done.
+  date (ascending or descending; undated tasks last), and open their notes in
+  Obsidian to mark them done.
 - Choose optional daily task summaries or alerts for due/overdue Obsidian
   Tasks items, with a configurable local time.
 - Show an activity count on the bar icon for due tasks, changed notes, and a
@@ -127,7 +127,8 @@ In **Tasks**, choose **All due dates**, **Overdue**, **Due today**, **Upcoming**
 or **Undated**. These filters use the local date and can be combined with text
 terms and sorting. Upcoming includes all future dates; undated includes tasks
 with missing or invalid `📅 YYYY-MM-DD` dates. The all-dates view remains the
-default, and changing vaults resets the date filter.
+default, and changing vaults resets the date filter. Use **Open task** to open
+its note and mark it complete in Obsidian; Companion does not edit task status.
 
 **Recent** combines Obsidian's own history (`.obsidian/workspace.json`
 `lastOpenFiles`) with notes opened from Companion. **Pinned** notes are saved
@@ -145,7 +146,9 @@ selected note to its provider.
 Reminder settings are per vault and off by default. Due-date alerts recognize
 the Obsidian Tasks `📅 YYYY-MM-DD` marker; they notify once at the chosen time
 on the due date or later if the shell was not running then. Daily summaries
-count open tasks without including task text in the notification.
+count open tasks without including task text in the notification. Failed
+deliveries are retried; a crash after delivery but before saving reminder
+history can cause a duplicate.
 
 ## Settings
 

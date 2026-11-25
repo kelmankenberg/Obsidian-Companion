@@ -385,11 +385,15 @@ class CompanionTests(unittest.TestCase):
         with self.assertRaises(companion.CompanionError):
             companion._relative_path(self.root, "../outside.md")
 
-    def test_task_completion_checks_the_original_line_before_writing(self):
-        (self.root / "tasks.md").write_text("- [ ] Ship this\n", encoding="utf-8")
+    def test_tasks_are_opened_for_completion_without_writing_the_note(self):
+        note = self.root / "tasks.md"
+        note.write_text("- [ ] Ship this\n", encoding="utf-8")
         task = self.run_action("tasks")["items"][0]
-        self.run_action("complete_task", **task)
-        self.assertEqual((self.root / "tasks.md").read_text(encoding="utf-8"), "- [x] Ship this\n")
+        response = self.run_action("open", path=task["path"])
+        self.assertTrue(response["uri"].startswith("obsidian://open?"))
+        with self.assertRaisesRegex(companion.CompanionError, "Unknown action"):
+            self.run_action("complete_task", **task)
+        self.assertEqual(note.read_text(encoding="utf-8"), "- [ ] Ship this\n")
 
     def test_tasks_filter_and_sort_by_due_date_with_undated_last(self):
         (self.root / "a.md").write_text(
@@ -513,12 +517,15 @@ class CompanionTests(unittest.TestCase):
                     hour=10, minute=0, tzinfo=tz
                 )
 
-        with patch.object(companion.dt, "datetime", FixedDateTime):
-            first = self.run_action("reminder_check")["notifications"]
-            second = self.run_action("reminder_check")["notifications"]
-        self.assertEqual(len(first), 1)
-        self.assertIn("1 open task", first[0])
-        self.assertEqual(second, [])
+        with patch.object(companion.dt, "datetime", FixedDateTime), \
+                patch.object(companion.subprocess, "run") as notify:
+            first = self.run_action("reminder_check")["delivered"]
+            second = self.run_action("reminder_check")["delivered"]
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(notify.call_count, 1)
+        self.assertIn("1 open task", notify.call_args.args[0][-1])
+        self.assertTrue(notify.call_args.kwargs["check"])
 
     def test_due_date_reminder_uses_obsidian_tasks_marker_once(self):
         due = dt.date.today().isoformat()
@@ -535,12 +542,66 @@ class CompanionTests(unittest.TestCase):
                     hour=10, minute=0, tzinfo=tz
                 )
 
+        with patch.object(companion.dt, "datetime", FixedDateTime), \
+                patch.object(companion.subprocess, "run") as notify:
+            first = self.run_action("reminder_check")["delivered"]
+            second = self.run_action("reminder_check")["delivered"]
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(notify.call_count, 1)
+        self.assertIn("1 task due or overdue", notify.call_args.args[0][-1])
+
+    def test_reminder_delivery_failure_retries_without_marking_sent(self):
+        due = dt.date.today().isoformat()
+        (self.root / "tasks.md").write_text(f"- [ ] Retry reminder 📅 {due}\n", encoding="utf-8")
+        real_datetime = dt.datetime
+
+        class FixedDateTime(real_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls.combine(dt.date.today(), real_datetime.min.time()).replace(
+                    hour=10, minute=0, tzinfo=tz
+                )
+
+        failures = [
+            subprocess.CalledProcessError(1, ["omarchy"]),
+            subprocess.TimeoutExpired("omarchy", 10),
+            FileNotFoundError("omarchy"),
+        ]
         with patch.object(companion.dt, "datetime", FixedDateTime):
-            first = self.run_action("reminder_check")["notifications"]
-            second = self.run_action("reminder_check")["notifications"]
-        self.assertEqual(len(first), 1)
-        self.assertIn("1 task due or overdue", first[0])
-        self.assertEqual(second, [])
+            for mode in ("daily_summary", "due_dates"):
+                self.run_action("set_reminders", mode=mode, time="09:00")
+                for failure in failures:
+                    with self.subTest(mode=mode, failure=type(failure).__name__):
+                        with patch.object(companion.subprocess, "run", side_effect=failure):
+                            with self.assertRaisesRegex(companion.CompanionError, "will be retried"):
+                                self.run_action("reminder_check")
+                        self.assertEqual(companion._reminder_settings(companion._state(), self.root)["sent"], {})
+                with patch.object(companion.subprocess, "run") as notify:
+                    self.assertTrue(self.run_action("reminder_check")["delivered"])
+                    self.assertFalse(self.run_action("reminder_check")["delivered"])
+                    self.assertEqual(notify.call_count, 1)
+                self.run_action("set_reminders", mode=mode, time="09:00")
+                state = companion._state()
+                companion._reminder_settings(state, self.root)["sent"] = {}
+                companion._write_state(state)
+
+    def test_reminder_does_not_save_history_before_delivery(self):
+        (self.root / "tasks.md").write_text("- [ ] Prepare review\n", encoding="utf-8")
+        self.run_action("set_reminders", mode="daily_summary", time="00:00")
+
+        def verify_during_delivery(*args, **kwargs):
+            settings = companion._reminder_settings(companion._state(), self.root)
+            self.assertEqual(settings["sent"], {})
+
+        with patch.object(companion.subprocess, "run", side_effect=verify_during_delivery) as notify:
+            with patch.object(companion, "_write_state", side_effect=OSError("disk error")):
+                with self.assertRaisesRegex(OSError, "disk error"):
+                    self.run_action("reminder_check")
+            self.assertEqual(companion._reminder_settings(companion._state(), self.root)["sent"], {})
+            self.assertTrue(self.run_action("reminder_check")["delivered"])
+            self.assertFalse(self.run_action("reminder_check")["delivered"])
+            self.assertEqual(notify.call_count, 2)
 
     def test_ai_handoff_is_explicit_and_does_not_change_the_note(self):
         path = self.root / "note.md"

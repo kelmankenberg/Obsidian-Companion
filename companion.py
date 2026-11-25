@@ -900,11 +900,11 @@ def _apply_reminders(state: dict[str, Any], root: Path, mode: Any, time: Any) ->
     return mode, time
 
 
-def _check_reminders(root: Path, state: dict[str, Any]) -> list[str]:
+def _check_reminders(root: Path, state: dict[str, Any]) -> bool:
     settings = _reminder_settings(state, root)
     now = dt.datetime.now()
     if settings["mode"] == "off" or now.strftime("%H:%M") < settings["time"]:
-        return []
+        return False
 
     today = now.date()
     sent = settings["sent"]
@@ -912,29 +912,38 @@ def _check_reminders(root: Path, state: dict[str, Any]) -> list[str]:
     if settings["mode"] == "daily_summary":
         key = f"daily:{today.isoformat()}"
         if sent.get(key) or not tasks:
-            return []
+            return False
+        keys = [key]
+        message = f"{len(tasks)} open task{'s' if len(tasks) != 1 else ''} in your vault."
+    else:
+        keys = []
+        seen = set()
+        for task in tasks:
+            try:
+                due_date = dt.date.fromisoformat(task["due"])
+            except ValueError:
+                continue
+            if due_date > today:
+                continue
+            key = f"due:{task['path']}:{task['text']}:{task['due']}"
+            if not sent.get(key) and key not in seen:
+                keys.append(key)
+                seen.add(key)
+        if not keys:
+            return False
+        message = f"{len(keys)} task{'s' if len(keys) != 1 else ''} due or overdue."
+    try:
+        subprocess.run(
+            ["omarchy", "notification", "send", "--app-name", "Obsidian Companion",
+             "Obsidian Companion", message],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise CompanionError("Could not deliver the task reminder; it will be retried.") from error
+    for key in keys:
         sent[key] = True
-        _write_state(state)
-        return [f"{len(tasks)} open task{'s' if len(tasks) != 1 else ''} in your vault."]
-
-    due = []
-    for task in tasks:
-        if not task["due"]:
-            continue
-        try:
-            due_date = dt.date.fromisoformat(task["due"])
-        except ValueError:
-            continue
-        if due_date > today:
-            continue
-        key = f"due:{task['path']}:{task['text']}:{task['due']}"
-        if not sent.get(key):
-            sent[key] = True
-            due.append(task)
-    if not due:
-        return []
     _write_state(state)
-    return [f"{len(due)} task{'s' if len(due) != 1 else ''} due or overdue."]
+    return True
 
 
 def _handle(request: dict[str, Any]) -> dict[str, Any]:
@@ -1078,7 +1087,7 @@ def _handle(request: dict[str, Any]) -> dict[str, Any]:
             "reminderTime": time,
         }
     if action == "reminder_check":
-        return {"ok": True, "notifications": _check_reminders(root, state)}
+        return {"ok": True, "delivered": _check_reminders(root, state)}
     if action == "open_vault":
         vault = next((item for item in _vaults(state) if item["path"] == str(root)), None)
         if not vault or not vault["id"]:
@@ -1162,19 +1171,6 @@ def _handle(request: dict[str, Any]) -> dict[str, Any]:
             "pinned": is_pinned,
             "message": message,
         }
-    if action == "complete_task":
-        relative = _relative_path(root, str(request.get("path", "")))
-        path = root / relative
-        lines = _read_note(path).splitlines(keepends=True)
-        line_index = request.get("line")
-        expected = str(request.get("text", ""))
-        if not isinstance(line_index, int) or line_index < 0 or line_index >= len(lines):
-            raise CompanionError("The task changed before it could be updated. Refresh and retry.")
-        if not re.match(r"^\s*[-*+]\s+\[ \]\s+" + re.escape(expected) + r"\s*$", lines[line_index].rstrip("\r\n")):
-            raise CompanionError("The task changed before it could be updated. Refresh and retry.")
-        lines[line_index] = re.sub(r"\[ \]", "[x]", lines[line_index], count=1)
-        path.write_text("".join(lines), encoding="utf-8")
-        return {"ok": True, "message": "Task marked done."}
     if action == "ai_prompt":
         if not _ui_settings(state)["aiEnabled"]:
             raise CompanionError("Ask AI is turned off in Settings.")

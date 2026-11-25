@@ -432,6 +432,13 @@ Panel {
       else
         errorMessage = "Could not open Obsidian. Check that its URI handler is installed."
     } else if (action === "open" || action === "daily" || action === "create") {
+      if (action === "open" && payload.taskCompletion) {
+        if (response.uri && Qt.openUrlExternally(response.uri))
+          notice = "Complete the task in Obsidian."
+        else
+          errorMessage = "Could not open the task in Obsidian. Check that its URI handler is installed."
+        return
+      }
       if (response.uri) Qt.openUrlExternally(response.uri)
       notice = response.message || "Opened in Obsidian."
       refreshCurrentView()
@@ -452,10 +459,6 @@ Panel {
       recent = updatePin(recent)
       pinned = updatePin(pinned)
       refreshCurrentView()
-    } else if (action === "complete_task") {
-      notice = response.message || "Task completed."
-      refreshCurrentView()
-      scheduleActivity()
     } else if (action === "ai_prompt") {
       aiQuestion = ""
       notice = response.message
@@ -463,14 +466,6 @@ Panel {
       reminderMode = response.reminderMode || "off"
       reminderTime = response.reminderTime || "09:00"
       notice = "Reminder preference saved."
-    } else if (action === "reminder_check") {
-      if (response.notifications && response.notifications.length > 0) {
-        notificationProcess.command = [
-          "omarchy", "notification", "send", "--app-name", "Obsidian Companion",
-          "Obsidian Companion", response.notifications[0]
-        ]
-        notificationProcess.running = true
-      }
     }
   }
 
@@ -527,7 +522,8 @@ Panel {
   }
 
   function openNote(note) {
-    request("open", { vault: selectedVault, path: note.path })
+    request("open", { vault: selectedVault, path: note.path,
+                      taskCompletion: activeTab === "tasks" })
   }
 
   function togglePin(note) {
@@ -704,16 +700,6 @@ Panel {
     running: root.initialized && !!root.selectedVault
     repeat: true
     onTriggered: root.scheduleActivity()
-  }
-
-  Process {
-    id: notificationProcess
-    stdout: StdioCollector {}
-    stderr: StdioCollector {}
-    onExited: function(exitCode) {
-      if (exitCode !== 0)
-        console.warn("Obsidian Companion: could not send task reminder notification.")
-    }
   }
 
   Timer {
@@ -1230,18 +1216,6 @@ Panel {
                     RowLayout {
                       spacing: Style.space(4)
                       Button {
-                        visible: root.activeTab === "tasks"
-                        text: "Done"
-                        tooltipText: "Mark this task complete in its note"
-                        enabled: !root.busy
-                        onClicked: root.request("complete_task", {
-                          vault: root.selectedVault,
-                          path: row.path,
-                          line: row.line,
-                          text: row.taskText
-                        })
-                      }
-                      Button {
                         visible: root.activeTab !== "tasks"
                         Layout.preferredWidth: row.isLocationView ? Style.space(72) : implicitWidth
                         text: row.isLocationView
@@ -1253,9 +1227,9 @@ Panel {
                         onClicked: root.togglePin(root.noteFromDelegate(row))
                       }
                       Button {
-                        text: "Open"
+                        text: root.activeTab === "tasks" ? "Open task" : "Open"
                         tooltipText: root.activeTab === "tasks"
-                          ? "Open the note containing this task in Obsidian"
+                          ? "Open the note and complete the task in Obsidian"
                           : "Open in Obsidian (or double-click the row)"
                         bordered: row.isLocationView
                         enabled: !root.busy

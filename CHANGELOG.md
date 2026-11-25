@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.4.1 - 2026-11-24
+
+- Open task notes for completion in Obsidian instead of rewriting notes, avoiding
+  lost concurrent edits.
+- Record reminders only after successful notification delivery and retry failures.
+- Refresh the marketplace preview to reflect the current clipboard-based AI flow.
+
 ## 0.4.0 - 2026-11-24
 
 - Show task text prominently in task rows, above the note path and due date.
