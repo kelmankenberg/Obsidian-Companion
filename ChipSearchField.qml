@@ -17,11 +17,13 @@ BorderSurface {
   property string fontFamily: Style.font.family
   property color foreground: Commons.Color.foreground
   property color accent: Commons.Color.accent
+  property alias focusTarget: input
 
   signal edited(string text)
   signal accepted()
   signal removeRequested(int index)
   signal clearRequested()
+  signal resultsRequested()
 
   readonly property bool _focused: input.activeFocus
   readonly property bool _hot: hover.hovered
@@ -137,7 +139,10 @@ BorderSurface {
           Keys.onReturnPressed: root.accepted()
           Keys.onEnterPressed: root.accepted()
           onUnhandledKey: function(event) {
-            if (event.key === Qt.Key_Backspace && text === "" && root.terms.length) {
+            if (event.key === Qt.Key_Down && event.modifiers === Qt.NoModifier && !input.preeditText) {
+              root.resultsRequested()
+              event.accepted = true
+            } else if (event.key === Qt.Key_Backspace && text === "" && root.terms.length) {
               root.removeRequested(root.terms.length - 1)
               event.accepted = true
             } else if (event.key === Qt.Key_Escape && (text !== "" || root.terms.length)) {

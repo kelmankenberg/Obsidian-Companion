@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+## 0.4.0 - 2026-11-24
+
+- Show task text prominently in task rows, above the note path and due date.
+- Add keyboard navigation for search, task filters, and note lists, plus a
+  documented shortcut setup for opening Companion.
+- Allow quick capture to append to an existing note selected in Search.
+- Add a header action to open the selected vault in Obsidian.
+- Place search results directly beneath the search field, with expandable
+  New note and Quick capture controls below the results.
+- Make titles and paths easier to read in Recent and Pinned, with consistent
+  labeled Pin/Unpin and Open controls.
+- Show AI controls only when a note is selected or Ask AI is chosen, while
+  keeping the clipboard privacy warning visible.
+- Add tag and folder filters to Search, including nested tags and YAML tag
+  properties. Tag filtering requires PyYAML.
+- Preview selected notes as plain text and copy Obsidian links from Search,
+  Recent, and Pinned.
+- Filter tasks by overdue, today, upcoming, or undated alongside text and sort
+  controls.
+
 ## 0.3.1 - 2026-11-16
 
 - Replace native TextInput-based fields with plain-text editors that do not

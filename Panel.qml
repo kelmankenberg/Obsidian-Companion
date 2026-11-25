@@ -7,6 +7,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Activity.js" as Activity
+import "ResultText.js" as ResultText
 
 Panel {
   id: root
@@ -20,14 +21,24 @@ Panel {
   property string query: ""
   property string taskFilter: ""
   property var searchTerms: []
+  property string searchTagDraft: ""
+  property string searchFolderDraft: ""
+  property string searchTag: ""
+  property string searchFolder: ""
   property string selectedPath: ""
   property string selectedTitle: ""
+  property bool previewVisible: false
+  property string previewState: ""
+  property string previewText: ""
+  property bool previewTruncated: false
   property var taskTerms: []
   property string taskSort: "file"
+  property string taskDueFilter: "all"
   property string noteTitle: ""
   property string createFolder: "Notes"
   property string createTemplate: ""
   property string captureText: ""
+  property string searchAction: ""
   property var vaultSettings: ({})
   property var uiSettings: ({ defaultTab: "search", aiEnabled: true, aiPresets: [] })
   property string barSection: ""
@@ -40,6 +51,7 @@ Panel {
   property string notice: ""
   property string pluginVersion: ""
   property string aiQuestion: ""
+  property bool aiRequested: false
   property var vaults: []
   property var results: []
   property var recent: []
@@ -77,11 +89,18 @@ Panel {
 
   function showItems(items) {
     var keepSelection = false
+    var current = notesList.currentIndex >= 0 && notesList.currentIndex < displayedNotes.count
+      ? displayedNotes.get(notesList.currentIndex) : null
+    var currentPath = current ? current.path : ""
+    var currentLine = current ? current.line : -1
+    var currentIndex = -1
     for (var j = 0; j < items.length; j++)
       if (String(items[j].path || "") === selectedPath) keepSelection = true
     if (!keepSelection) selectNote(null)
     displayedNotes.clear()
-    for (var i = 0; i < items.length; i++)
+    for (var i = 0; i < items.length; i++) {
+      if (current && String(items[i].path || "") === currentPath
+          && (activeTab !== "tasks" || items[i].line === currentLine)) currentIndex = i
       displayedNotes.append({
         path: String(items[i].path || ""),
         title: String(items[i].title || ""),
@@ -91,6 +110,8 @@ Panel {
         due: String(items[i].due || ""),
         line: Number.isInteger(items[i].line) ? items[i].line : -1
       })
+    }
+    notesList.currentIndex = currentIndex
   }
 
   function addTerm(list, text) {
@@ -119,7 +140,7 @@ Panel {
     var next = searchTerms.slice()
     next.splice(index, 1)
     searchTerms = next
-    if (next.length === 0 && !query.trim()) {
+    if (!hasSearchInput()) {
       results = []
       showItems([])
     } else {
@@ -140,6 +161,23 @@ Panel {
     query = ""
     results = []
     showItems([])
+    if (hasSearchInput()) refreshCurrentView()
+  }
+
+  function applySearchFilters() {
+    searchTag = searchTagDraft.trim()
+    searchFolder = searchFolderDraft.trim()
+    searchDebounce.stop()
+    results = []
+    showItems([])
+    if (hasSearchInput()) refreshCurrentView()
+    else errorMessage = ""
+  }
+
+  function clearSearchFilters() {
+    searchTagDraft = ""
+    searchFolderDraft = ""
+    applySearchFilters()
   }
 
   function clearTaskTerms() {
@@ -150,7 +188,7 @@ Panel {
   }
 
   function hasSearchInput() {
-    return searchTerms.length > 0 || query.trim() !== ""
+    return searchTerms.length > 0 || query.trim() !== "" || searchTag !== "" || searchFolder !== ""
   }
 
   function noteFromDelegate(row) {
@@ -193,6 +231,7 @@ Panel {
     reminderTime = response.reminderTime || "09:00"
     vaultSettings = response.vaultSettings || ({})
     uiSettings = response.uiSettings || ({ defaultTab: "search", aiEnabled: true, aiPresets: [] })
+    if (uiSettings.aiEnabled === false) aiRequested = false
     barSection = response.barSection || ""
     createFolder = vaultSettings.newNoteFolder || "Notes"
     createTemplate = vaultSettings.newNoteTemplate || ""
@@ -205,9 +244,15 @@ Panel {
     tasks = []
     query = ""
     searchTerms = []
+    searchTagDraft = ""
+    searchFolderDraft = ""
+    searchTag = ""
+    searchFolder = ""
     taskFilter = ""
     taskTerms = []
+    taskDueFilter = "all"
     selectNote(null)
+    aiRequested = false
     showItems([])
     activityBaseline = null
     activityFiles = ({})
@@ -256,6 +301,7 @@ Panel {
 
   function openSettings() {
     showSettings = true
+    contentFlick.contentY = 0
   }
 
   function closeSettings() {
@@ -318,7 +364,16 @@ Panel {
   }
 
   function handleResponse(action, payload, response) {
+    if (action === "search" && (payload.vault !== selectedVault || payload.query !== query.trim()
+        || JSON.stringify(payload.terms || []) !== JSON.stringify(searchTerms)
+        || (payload.tag || "") !== searchTag || (payload.folder || "") !== searchFolder)) return
+    if (action === "preview_note"
+        && (payload.vault !== selectedVault || payload.path !== selectedPath || !previewVisible)) return
+    if (action === "tasks" && (payload.vault !== selectedVault || payload.filter !== taskFilter.trim()
+        || payload.sort !== taskSort || payload.dueFilter !== taskDueFilter
+        || JSON.stringify(payload.terms || []) !== JSON.stringify(taskTerms))) return
     if (!response || response.ok !== true) {
+      if (action === "preview_note") previewState = "error"
       errorMessage = response && response.error
         ? String(response.error).slice(0, 360)
         : "The request failed. Check the plugin output for details."
@@ -362,6 +417,20 @@ Panel {
     } else if (action === "tasks") {
       tasks = response.items || []
       if (activeTab === "tasks") showItems(tasks)
+    } else if (action === "preview_note") {
+      previewText = String(response.text || "")
+      previewTruncated = response.truncated === true
+      previewState = "ready"
+      Qt.callLater(function() {
+        if (root.opened && root.previewVisible) root.ensureVisible(notePreview)
+      })
+    } else if (action === "copy_note_link") {
+      notice = response.message || "Obsidian link copied to the clipboard."
+    } else if (action === "open_vault") {
+      if (response.uri && Qt.openUrlExternally(response.uri))
+        notice = "Opening the selected vault in Obsidian."
+      else
+        errorMessage = "Could not open Obsidian. Check that its URI handler is installed."
     } else if (action === "open" || action === "daily" || action === "create") {
       if (response.uri) Qt.openUrlExternally(response.uri)
       notice = response.message || "Opened in Obsidian."
@@ -441,12 +510,15 @@ Panel {
       vault: selectedVault,
       filter: taskFilter.trim(),
       terms: taskTerms,
-      sort: taskSort
+      sort: taskSort,
+      dueFilter: taskDueFilter
     })
     else if (hasSearchInput()) request("search", {
       vault: selectedVault,
       query: query.trim(),
-      terms: searchTerms
+      terms: searchTerms,
+      tag: searchTag,
+      folder: searchFolder
     })
   }
 
@@ -476,9 +548,14 @@ Panel {
   function capture(destination) {
     var text = captureText.trim()
     if (!text) return
+    if (destination === "note" && !selectedPath) {
+      errorMessage = "Select a note before capturing to it."
+      return
+    }
     request("capture", {
       vault: selectedVault,
       destination: destination || "",
+      path: destination === "note" ? selectedPath : "",
       text: text
     })
   }
@@ -487,17 +564,83 @@ Panel {
     request("daily", { vault: selectedVault })
   }
 
+  function openVault() {
+    request("open_vault", { vault: selectedVault })
+  }
+
+  function ensureVisible(item) {
+    var top = item.mapToItem(contentColumn, 0, 0).y
+    var bottom = top + item.height
+    if (item.height > contentFlick.height || top < contentFlick.contentY)
+      contentFlick.contentY = Math.max(0, top)
+    else if (bottom > contentFlick.contentY + contentFlick.height)
+      contentFlick.contentY = Math.min(
+        Math.max(0, contentFlick.contentHeight - contentFlick.height),
+        bottom - contentFlick.height)
+  }
+
+  function showSearchAction(section) {
+    searchAction = section
+    if (!section) return
+    Qt.callLater(function() {
+      if (!root.opened || root.showSettings || root.activeTab !== "search"
+          || root.searchAction !== section) return
+      root.ensureVisible(section === "create" ? createSection : captureSection)
+      if (section === "create") titleField.focusInput()
+      else captureField.focusInput()
+    })
+  }
+
+  function focusNoteResults() {
+    if (notesList.focusResults()) ensureVisible(notesList)
+  }
+
   function selectNote(note) {
-    selectedPath = note ? String(note.path || "") : ""
+    var path = note ? String(note.path || "") : ""
+    if (path !== selectedPath) {
+      previewVisible = false
+      previewState = ""
+      previewText = ""
+      previewTruncated = false
+    }
+    selectedPath = path
     selectedTitle = note ? String(note.title || note.path || "") : ""
   }
 
-  function aiAvailable() {
-    return uiSettings.aiEnabled !== false && activeTab !== "tasks" && displayedNotes.count > 0
+  function togglePreview() {
+    if (!selectedPath || busy) return
+    if (previewVisible) {
+      previewVisible = false
+      previewText = ""
+      previewState = ""
+      previewTruncated = false
+    } else {
+      previewVisible = true
+      previewState = "loading"
+      request("preview_note", { vault: selectedVault, path: selectedPath })
+      Qt.callLater(function() {
+        if (root.opened && root.previewVisible) root.ensureVisible(notePreview)
+      })
+    }
+  }
+
+  function copyNoteLink() {
+    if (!selectedPath || busy) return
+    request("copy_note_link", { vault: selectedVault, path: selectedPath })
+  }
+
+  function showAi() {
+    if (uiSettings.aiEnabled === false || !selectedVault || activeTab === "tasks" || busy) return
+    aiRequested = true
+    Qt.callLater(function() {
+      if (!root.opened || root.showSettings || !aiSection.controlsVisible) return
+      root.ensureVisible(aiSection)
+      aiSection.focusQuestion()
+    })
   }
 
   function askAgent() {
-    if (!selectedPath || !aiQuestion.trim()) return
+    if (uiSettings.aiEnabled === false || !selectedPath || !aiQuestion.trim()) return
     request("ai_prompt", {
       vault: selectedVault,
       path: selectedPath,
@@ -507,9 +650,19 @@ Panel {
 
   function changeTab(tab) {
     activeTab = tab
+    contentFlick.contentY = 0
+    notesList.currentIndex = -1
     showItems(tab === "recent" ? recent
       : (tab === "pinned" ? pinned
       : (tab === "tasks" ? tasks : results)))
+    if (opened && !showSettings) {
+      Qt.callLater(function() {
+        if (!root.opened || root.showSettings || root.activeTab !== tab) return
+        if (tab === "search") searchField.focusInput()
+        else if (tab === "tasks") taskField.focusInput()
+        else if (!notesList.focusResults()) keyCatcher.forceActiveFocus()
+      })
+    }
     refreshCurrentView()
   }
 
@@ -627,7 +780,11 @@ Panel {
     bar: root.bar
     owner: root.hostWidget || root
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: !root.showSettings && root.activeTab === "search" && root.selectedVault
+      ? searchField.focusTarget
+      : (!root.showSettings && root.activeTab === "tasks" && root.selectedVault
+        ? taskField.focusTarget
+        : (!root.showSettings && notesList.count > 0 ? notesList : keyCatcher))
     contentWidth: popup.fittedContentWidth(Style.space(540), 680)
     contentHeight: popup.fittedContentHeight(contentColumn.implicitHeight, 760)
 
@@ -636,6 +793,102 @@ Panel {
       anchors.fill: parent
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onMoveRequested: function(dx, dy) {
+        if (dy !== 0 && !root.showSettings) root.focusNoteResults()
+      }
+
+      Shortcut {
+        sequence: "Ctrl+1"
+        enabled: root.opened && !root.showSettings && !!root.selectedVault
+        onActivated: root.changeTab("search")
+      }
+      Shortcut {
+        sequence: "Ctrl+2"
+        enabled: root.opened && !root.showSettings && !!root.selectedVault
+        onActivated: root.changeTab("recent")
+      }
+      Shortcut {
+        sequence: "Ctrl+3"
+        enabled: root.opened && !root.showSettings && !!root.selectedVault
+        onActivated: root.changeTab("pinned")
+      }
+      Shortcut {
+        sequence: "Ctrl+4"
+        enabled: root.opened && !root.showSettings && !!root.selectedVault
+        onActivated: root.changeTab("tasks")
+      }
+      Shortcut {
+        sequence: "Alt+N"
+        enabled: root.opened && !root.showSettings && root.activeTab === "search"
+          && !!root.selectedVault && !root.busy
+        onActivated: root.showSearchAction("create")
+      }
+      Shortcut {
+        sequence: "Alt+C"
+        enabled: root.opened && !root.showSettings && root.activeTab === "search"
+          && !!root.selectedVault && !root.busy
+        onActivated: root.showSearchAction("capture")
+      }
+      Shortcut {
+        sequence: "Alt+A"
+        enabled: root.opened && !root.showSettings && root.activeTab !== "tasks"
+          && !!root.selectedVault && root.uiSettings.aiEnabled !== false && !root.busy
+        onActivated: root.showAi()
+      }
+      Shortcut {
+        sequence: "Alt+P"
+        enabled: root.opened && !root.showSettings && root.activeTab !== "tasks"
+          && !!root.selectedPath && !root.busy
+        onActivated: root.togglePreview()
+      }
+      Shortcut {
+        sequence: "Alt+L"
+        enabled: root.opened && !root.showSettings && root.activeTab !== "tasks"
+          && !!root.selectedPath && !root.busy
+        onActivated: root.copyNoteLink()
+      }
+      Shortcut {
+        sequence: "Alt+D"
+        enabled: root.opened && !root.showSettings && root.activeTab === "tasks"
+          && !!root.selectedVault
+        onActivated: {
+          root.ensureVisible(taskDateControls)
+          taskDateControls.openDueFilter()
+        }
+      }
+      Shortcut {
+        sequence: "Alt+T"
+        enabled: root.opened && !root.showSettings && root.activeTab === "search"
+          && !!root.selectedVault
+        onActivated: {
+          root.ensureVisible(searchFilters)
+          searchFilters.focusTag()
+        }
+      }
+      Shortcut {
+        sequence: "Alt+F"
+        enabled: root.opened && !root.showSettings && root.activeTab === "search"
+          && !!root.selectedVault
+        onActivated: {
+          root.ensureVisible(searchFilters)
+          searchFilters.focusFolder()
+        }
+      }
+      Shortcut {
+        sequence: "Alt+Shift+F"
+        enabled: root.opened && !root.showSettings && root.activeTab === "search"
+          && !!root.selectedVault && !root.busy
+        onActivated: root.clearSearchFilters()
+      }
+
+      Flickable {
+        id: contentFlick
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: contentColumn.implicitHeight
+        boundsBehavior: Flickable.StopAtBounds
+        clip: true
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
       Column {
         id: contentColumn
@@ -678,6 +931,12 @@ Panel {
               tooltipText: "Switch to another vault"
               onPicked: function(value) { if (value !== root.selectedVault) root.selectVault(value) }
             }
+          }
+          Button {
+            text: "Obsidian"
+            tooltipText: "Open the selected vault in Obsidian"
+            enabled: !!root.selectedVault && !root.busy
+            onClicked: root.openVault()
           }
           Button {
             text: "Today"
@@ -783,6 +1042,23 @@ Panel {
             font.pixelSize: Style.font.bodySmall
           }
 
+          SearchFilterControls {
+            id: searchFilters
+            visible: root.activeTab === "search"
+            width: parent.width
+            tagDraft: root.searchTagDraft
+            folderDraft: root.searchFolderDraft
+            activeTag: root.searchTag
+            activeFolder: root.searchFolder
+            vaultAvailable: !!root.selectedVault
+            busy: root.busy
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            onTagEdited: function(value) { root.searchTagDraft = value }
+            onFolderEdited: function(value) { root.searchFolderDraft = value }
+            onApplyRequested: root.applySearchFilters()
+            onClearRequested: root.clearSearchFilters()
+          }
+
           ChipSearchField {
             id: searchField
             visible: root.activeTab === "search"
@@ -790,19 +1066,281 @@ Panel {
             terms: root.searchTerms
             text: root.query
             placeholderText: "Search notes… (Enter adds a term)"
-            inputEnabled: !!root.selectedVault && !root.busy
+            inputEnabled: !!root.selectedVault
             fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
             onEdited: function(text) {
               root.query = text
+              root.results = []
+              root.showItems([])
               searchDebounce.restart()
             }
             onAccepted: root.commitSearchTerm()
             onRemoveRequested: function(index) { root.removeSearchTerm(index) }
             onClearRequested: root.clearSearchTerms()
+            onResultsRequested: root.focusNoteResults()
           }
 
           Column {
+            visible: root.activeTab === "tasks"
+            width: parent.width
+            spacing: Style.space(6)
+            ChipSearchField {
+              id: taskField
+              width: parent.width
+              terms: root.taskTerms
+              text: root.taskFilter
+              placeholderText: "Filter tasks… (Enter adds a term)"
+              inputEnabled: !!root.selectedVault
+              fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+              onEdited: function(text) {
+                root.taskFilter = text
+                root.tasks = []
+                root.showItems([])
+                taskFilterDebounce.restart()
+              }
+              onAccepted: root.commitTaskTerm()
+              onRemoveRequested: function(index) { root.removeTaskTerm(index) }
+              onClearRequested: root.clearTaskTerms()
+              onResultsRequested: root.focusNoteResults()
+            }
+            TaskDateControls {
+              id: taskDateControls
+              width: parent.width
+              dueFilter: root.taskDueFilter
+              sort: root.taskSort
+              vaultAvailable: !!root.selectedVault
+              fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+              onDueFilterPicked: function(value) {
+                root.taskDueFilter = value
+                taskFilterDebounce.stop()
+                root.tasks = []
+                root.showItems([])
+                root.refreshCurrentView()
+              }
+              onSortPicked: function(value) {
+                root.taskSort = value
+                root.refreshCurrentView()
+              }
+            }
+          }
+
+          KeyboardResultList {
+            id: notesList
+            width: parent.width
+            height: count > 0 ? Math.min(Style.space(300), Math.max(Style.space(72), contentHeight)) : 0
+            visible: count > 0
+            clip: true
+            spacing: Style.space(4)
+            model: displayedNotes
+            boundsBehavior: Flickable.StopAtBounds
+            onFilterRequested: {
+              if (root.activeTab === "search") {
+                root.ensureVisible(searchField)
+                searchField.focusInput()
+              } else if (root.activeTab === "tasks") {
+                root.ensureVisible(taskField)
+                taskField.focusInput()
+              }
+            }
+            onOpenRequested: function(index) {
+              if (!root.busy && index >= 0 && index < displayedNotes.count)
+                root.openNote(displayedNotes.get(index))
+            }
+            onKeyboardSelectionChanged: function(index) {
+              if (root.activeTab !== "tasks" && index >= 0 && index < displayedNotes.count)
+                root.selectNote(displayedNotes.get(index))
+            }
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                delegate: Rectangle {
+                  id: row
+                  required property int index
+                  required property string path
+                  required property string title
+                  required property string preview
+                  required property bool pinned
+                  required property string taskText
+                  required property string due
+                  required property int line
+                  readonly property bool isLocationView: root.activeTab === "recent" || root.activeTab === "pinned"
+                  width: notesList.width
+                  height: rowContent.implicitHeight + Style.space(12)
+                  radius: Math.min(4, Style.cornerRadius)
+                  readonly property bool isSelected: (notesList.activeFocus && notesList.currentIndex === row.index)
+                    || (root.activeTab !== "tasks" && root.selectedPath === row.path)
+                  color: isSelected
+                    ? Style.selectionFillFor(Color.popups.text, Color.accent)
+                    : Color.popups.background
+                  border.color: isSelected ? Color.accent : Color.popups.border
+                  border.width: isSelected ? 2 : 1
+
+                  RowLayout {
+                    id: rowContent
+                    anchors.fill: parent
+                    anchors.margins: Style.space(6)
+                    spacing: Style.space(8)
+                    ColumnLayout {
+                      visible: !row.isLocationView
+                      Layout.fillWidth: true
+                      spacing: Style.space(2)
+                      Text {
+                        Layout.fillWidth: true
+                        textFormat: Text.PlainText
+                        text: ResultText.primary(root.activeTab, row.title, row.taskText, row.path)
+                        color: Color.popups.text
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.body
+                        font.bold: true
+                        elide: Text.ElideRight
+                        maximumLineCount: 2
+                        wrapMode: Text.Wrap
+                      }
+                      Text {
+                        Layout.fillWidth: true
+                        textFormat: Text.PlainText
+                        visible: !!row.preview || !!row.path
+                        text: root.activeTab === "tasks" && row.due
+                          ? "Due " + row.due + " · " + row.path
+                          : (row.preview || row.path)
+                        color: Color.popups.text
+                        opacity: 0.7
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                        elide: Text.ElideRight
+                      }
+                    }
+                    NoteLocationText {
+                      id: locationText
+                      visible: row.isLocationView
+                      Layout.fillWidth: true
+                      Layout.minimumWidth: 0
+                      title: row.title
+                      path: row.path
+                      foreground: Color.popups.text
+                      fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                      titleSize: Style.font.body
+                      pathSize: Style.font.bodySmall
+                      spacing: Style.space(3)
+
+                      NotePathToolTip {
+                        visible: locationText.pathHovered && locationText.pathTruncated
+                        notePath: row.path
+                        fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                      }
+                    }
+                    RowLayout {
+                      spacing: Style.space(4)
+                      Button {
+                        visible: root.activeTab === "tasks"
+                        text: "Done"
+                        tooltipText: "Mark this task complete in its note"
+                        enabled: !root.busy
+                        onClicked: root.request("complete_task", {
+                          vault: root.selectedVault,
+                          path: row.path,
+                          line: row.line,
+                          text: row.taskText
+                        })
+                      }
+                      Button {
+                        visible: root.activeTab !== "tasks"
+                        Layout.preferredWidth: row.isLocationView ? Style.space(72) : implicitWidth
+                        text: row.isLocationView
+                          ? (row.pinned ? "Unpin" : "Pin")
+                          : (row.pinned ? "★" : "☆")
+                        tooltipText: row.pinned ? "Unpin this note" : "Pin this note"
+                        bordered: row.isLocationView
+                        enabled: !root.busy
+                        onClicked: root.togglePin(root.noteFromDelegate(row))
+                      }
+                      Button {
+                        text: "Open"
+                        tooltipText: root.activeTab === "tasks"
+                          ? "Open the note containing this task in Obsidian"
+                          : "Open in Obsidian (or double-click the row)"
+                        bordered: row.isLocationView
+                        enabled: !root.busy
+                        onClicked: root.openNote(root.noteFromDelegate(row))
+                      }
+                    }
+                  }
+
+                  MouseArea {
+                    anchors.fill: parent
+                    z: -1
+                    id: rowMouse
+                    hoverEnabled: true
+                    cursorShape: root.activeTab === "tasks" ? Qt.ArrowCursor : Qt.PointingHandCursor
+                    onClicked: {
+                      notesList.currentIndex = row.index
+                      if (root.activeTab !== "tasks") root.selectNote(root.noteFromDelegate(row))
+                    }
+                    onDoubleClicked: root.openNote(root.noteFromDelegate(row))
+                    PanelToolTip {
+                      visible: rowMouse.containsMouse && !(row.isLocationView
+                        && locationText.pathHovered && locationText.pathTruncated)
+                      text: root.activeTab === "tasks"
+                        ? "Double-click to open this task's note"
+                        : "Click to select · double-click to open"
+                    }
+                  }
+                }
+          }
+
+          NotePreviewControls {
+            id: notePreview
+            width: parent.width
+            visible: root.activeTab !== "tasks" && !!root.selectedPath
+            selectedPath: root.selectedPath
+            selectedTitle: root.selectedTitle
+            busy: root.busy
+            previewVisible: root.previewVisible
+            previewState: root.previewState
+            previewText: root.previewText
+            truncated: root.previewTruncated
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            onPreviewRequested: root.togglePreview()
+            onCopyRequested: root.copyNoteLink()
+          }
+
+          Text {
+            visible: root.activeTab !== "search" && displayedNotes.count === 0 && !root.busy
+            width: parent.width
+            text: root.activeTab === "recent"
+              ? "No recent notes found. Open a note in Obsidian or from Companion."
+              : (root.activeTab === "pinned"
+              ? "No pinned notes yet. Pin one from Search or Recent."
+              : ((root.taskFilter.trim() || root.taskTerms.length || root.taskDueFilter !== "all")
+                ? "No open tasks match this filter." : "No open tasks found."))
+            color: Color.popups.text
+            opacity: 0.7
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.Wrap
+          }
+
+          Text {
+            visible: root.activeTab === "search" && root.results.length === 0 && !root.busy
+              && root.hasSearchInput()
+            width: parent.width
+            text: "No matching notes."
+            color: Color.popups.text
+            opacity: 0.7
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.Wrap
+          }
+
+          SearchActionControls {
             visible: root.activeTab === "search"
+            width: parent.width
+            expandedSection: root.searchAction
+            actionsEnabled: !!root.selectedVault && !root.busy
+            onSectionRequested: function(section) { root.showSearchAction(section) }
+          }
+
+          Column {
+            id: createSection
+            visible: root.activeTab === "search" && root.searchAction === "create"
             width: parent.width
             spacing: Style.space(6)
             RowLayout {
@@ -849,6 +1387,13 @@ Panel {
                 onPicked: function(value) { root.createTemplate = value }
               }
             }
+          }
+
+          Column {
+            id: captureSection
+            visible: root.activeTab === "search" && root.searchAction === "capture"
+            width: parent.width
+            spacing: Style.space(6)
             SafeTextField {
               id: captureField
               width: parent.width
@@ -857,6 +1402,18 @@ Panel {
               enabled: !!root.selectedVault && !root.busy
               onTextEdited: root.captureText = text
               onAccepted: root.capture("")
+            }
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: root.selectedPath
+                ? "Capture to selected note: " + root.selectedPath
+                : "Select a search result to capture to an existing note."
+              color: Color.popups.text
+              opacity: 0.72
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.bodySmall
+              elide: Text.ElideMiddle
             }
             RowLayout {
               width: parent.width
@@ -875,252 +1432,33 @@ Panel {
                 enabled: !!root.captureText.trim() && !!root.selectedVault && !root.busy
                 onClicked: root.capture("daily")
               }
-            }
-          }
-
-
-          Column {
-            visible: root.activeTab === "tasks"
-            width: parent.width
-            spacing: Style.space(6)
-            RowLayout {
-              width: parent.width
-              spacing: Style.space(6)
-              ChipSearchField {
-                Layout.fillWidth: true
-                terms: root.taskTerms
-                text: root.taskFilter
-                placeholderText: "Filter tasks… (Enter adds a term)"
-                inputEnabled: !!root.selectedVault
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-                onEdited: function(text) {
-                  root.taskFilter = text
-                  taskFilterDebounce.restart()
-                }
-                onAccepted: root.commitTaskTerm()
-                onRemoveRequested: function(index) { root.removeTaskTerm(index) }
-                onClearRequested: root.clearTaskTerms()
-              }
-              Choice {
-                Layout.preferredWidth: Style.space(170)
-                showLabel: false
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-                options: [
-                  { value: "file", label: "File order" },
-                  { value: "due_asc", label: "Due date ↑" },
-                  { value: "due_desc", label: "Due date ↓" }
-                ]
-                bound: root.taskSort
-                tooltipText: "Sort by file order or by 📅 due date; undated tasks go last"
-                onPicked: function(value) {
-                  root.taskSort = value
-                  root.refreshCurrentView()
-                }
-              }
-            }
-          }
-
-          ListView {
-            id: notesList
-            width: parent.width
-            height: count > 0 ? Math.min(Style.space(300), Math.max(Style.space(72), contentHeight)) : 0
-            visible: count > 0
-            clip: true
-            spacing: Style.space(4)
-            model: displayedNotes
-            boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                delegate: Rectangle {
-                  id: row
-                  required property string path
-                  required property string title
-                  required property string preview
-                  required property bool pinned
-                  required property string taskText
-                  required property string due
-                  required property int line
-                  width: notesList.width
-                  height: rowContent.implicitHeight + Style.space(12)
-                  radius: Math.min(4, Style.cornerRadius)
-                  readonly property bool isSelected: root.activeTab !== "tasks" && root.selectedPath === row.path
-                  color: isSelected
-                    ? Style.selectionFillFor(Color.popups.text, Color.accent)
-                    : Color.popups.background
-                  border.color: isSelected ? Color.accent : Color.popups.border
-                  border.width: isSelected ? 2 : 1
-
-                  RowLayout {
-                    id: rowContent
-                    anchors.fill: parent
-                    anchors.margins: Style.space(6)
-                    spacing: Style.space(8)
-                    ColumnLayout {
-                      Layout.fillWidth: true
-                      spacing: Style.space(2)
-                      Text {
-                        Layout.fillWidth: true
-                        textFormat: Text.PlainText
-                        text: row.title || row.taskText || row.path
-                        color: Color.popups.text
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.body
-                        font.bold: true
-                        elide: Text.ElideRight
-                        maximumLineCount: 2
-                        wrapMode: Text.Wrap
-                      }
-                      Text {
-                        Layout.fillWidth: true
-                        textFormat: Text.PlainText
-                        visible: !!row.preview || !!row.path
-                        text: root.activeTab === "tasks" && row.due
-                          ? "Due " + row.due + " · " + row.path
-                          : (row.preview || row.path)
-                        color: Color.popups.text
-                        opacity: 0.7
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.bodySmall
-                        elide: Text.ElideRight
-                      }
-                    }
-                    Button {
-                      visible: root.activeTab === "tasks"
-                      text: "Done"
-                      tooltipText: "Mark this task complete in its note"
-                      enabled: !root.busy
-                      onClicked: root.request("complete_task", {
-                        vault: root.selectedVault,
-                        path: row.path,
-                        line: row.line,
-                        text: row.taskText
-                      })
-                    }
-                    Button {
-                      visible: root.activeTab !== "tasks"
-                      text: root.noteIsPinned(root.noteFromDelegate(row)) ? "★" : "☆"
-                      tooltipText: root.noteIsPinned(root.noteFromDelegate(row)) ? "Unpin this note" : "Pin this note"
-                      enabled: !root.busy
-                      onClicked: root.togglePin(root.noteFromDelegate(row))
-                    }
-                    Button {
-                      text: "Open"
-                      tooltipText: root.activeTab === "tasks"
-                        ? "Open the note containing this task in Obsidian"
-                        : "Open in Obsidian (or double-click the row)"
-                      enabled: !root.busy
-                      onClicked: root.openNote(root.noteFromDelegate(row))
-                    }
-                  }
-
-                  MouseArea {
-                    anchors.fill: parent
-                    z: -1
-                    id: rowMouse
-                    hoverEnabled: true
-                    cursorShape: root.activeTab === "tasks" ? Qt.ArrowCursor : Qt.PointingHandCursor
-                    onClicked: {
-                      if (root.activeTab !== "tasks") root.selectNote(root.noteFromDelegate(row))
-                    }
-                    onDoubleClicked: root.openNote(root.noteFromDelegate(row))
-                    PanelToolTip {
-                      visible: rowMouse.containsMouse
-                      text: root.activeTab === "tasks"
-                        ? "Double-click to open this task's note"
-                        : "Click to select for Ask AI · double-click to open"
-                    }
-                  }
-                }
-          }
-
-          Text {
-            visible: root.activeTab !== "search" && displayedNotes.count === 0 && !root.busy
-            width: parent.width
-            text: root.activeTab === "recent"
-              ? "No recent notes found. Open a note in Obsidian or from Companion."
-              : (root.activeTab === "pinned"
-              ? "No pinned notes yet. Pin one from Search or Recent."
-              : ((root.taskFilter.trim() || root.taskTerms.length)
-                ? "No open tasks match this filter." : "No open tasks found."))
-            color: Color.popups.text
-            opacity: 0.7
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.Wrap
-          }
-
-          Text {
-            visible: root.activeTab === "search" && root.results.length === 0 && !root.busy
-              && root.hasSearchInput()
-            width: parent.width
-            text: "No matching notes."
-            color: Color.popups.text
-            opacity: 0.7
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.Wrap
-          }
-
-          Column {
-            visible: root.aiAvailable()
-            width: parent.width
-            spacing: Style.space(6)
-            Text {
-              width: parent.width
-              textFormat: Text.PlainText
-              text: root.selectedPath
-                ? "Selected: " + root.selectedTitle
-                : "Click a note above to select it for AI."
-              color: Color.popups.text
-              opacity: root.selectedPath ? 0.9 : 0.68
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.bodySmall
-              font.bold: !!root.selectedPath
-              elide: Text.ElideRight
-            }
-            RowLayout {
-              width: parent.width
-              spacing: Style.space(6)
-              SafeTextField {
-                id: aiQuestionField
-                Layout.fillWidth: true
-                placeholderText: root.selectedPath
-                  ? "Write a question about this note"
-                  : "Select a note, then ask a question"
-                text: root.aiQuestion
-                enabled: !root.busy
-                onTextEdited: root.aiQuestion = text
-                onAccepted: root.askAgent()
-              }
-              Choice {
-                visible: (root.uiSettings.aiPresets || []).length > 0
-                Layout.preferredWidth: Style.space(130)
-                showLabel: false
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-                enabled: !root.busy
-                options: [{ value: "", label: "Presets" }].concat((root.uiSettings.aiPresets || []).map(function(preset) {
-                  return { value: preset, label: preset }
-                }))
-                bound: ""
-                onPicked: function(value) { if (value) root.aiQuestion = value }
-                tooltipText: "Fill in a saved question (manage presets in Settings)"
-              }
               Button {
-                text: "Copy AI prompt"
-                tooltipText: "Copy the selected note and question; paste them into your AI agent"
-                bordered: true
-                enabled: !!root.selectedPath && !!root.aiQuestion.trim() && !root.busy
-                onClicked: root.askAgent()
+                text: "Selected note"
+                tooltipText: "Append the capture to the selected note"
+                enabled: !!root.captureText.trim() && !!root.selectedVault && !!root.selectedPath && !root.busy
+                onClicked: root.capture("note")
               }
             }
-            Text {
-              width: parent.width
-              text: "Copying puts the note and question on your clipboard. Other apps or clipboard managers may read or retain it. Paste it into your AI agent."
-              color: Color.popups.text
-              opacity: 0.68
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.bodySmall
-              wrapMode: Text.Wrap
-            }
+          }
+
+          AiPromptControls {
+            id: aiSection
+            width: parent.width
+            featureEnabled: root.uiSettings.aiEnabled !== false
+            vaultAvailable: !!root.selectedVault
+            activeTab: root.activeTab
+            requested: root.aiRequested
+            busy: root.busy
+            selectedPath: root.selectedPath
+            selectedTitle: root.selectedTitle
+            question: root.aiQuestion
+            presets: root.uiSettings.aiPresets || []
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            onShowRequested: root.showAi()
+            onQuestionEdited: function(value) { root.aiQuestion = value }
+            onPresetPicked: function(value) { root.aiQuestion = value }
+            onCopyRequested: root.askAgent()
+          }
           }
         }
       }
@@ -1146,6 +1484,21 @@ Panel {
         busy: root.busy,
         pendingAction: root.pendingAction,
         queuedAction: root.queuedAction,
+        keyboardFocus: searchField.focusTarget.activeFocus ? "search"
+          : (taskField.focusTarget.activeFocus ? "task-filter"
+          : (searchFilters.tagFocused ? "tag-filter"
+          : (searchFilters.folderFocused ? "folder-filter"
+          : (titleField.focusTarget.activeFocus ? "new-note"
+          : (captureField.focusTarget.activeFocus ? "capture"
+          : (aiSection.questionFocused ? "ai-question"
+          : (notesList.activeFocus ? "results" : "other"))))))),
+        keyboardResultIndex: notesList.currentIndex,
+        searchSection: root.searchAction,
+        searchFiltersActive: !!(root.searchTag || root.searchFolder),
+        taskDueFilter: root.taskDueFilter,
+        previewVisible: root.previewVisible && root.activeTab !== "tasks",
+        previewState: root.previewState,
+        aiControlsVisible: aiSection.controlsVisible,
         activityCount: root.activityCount,
         activityDue: root.activityDue,
         activityChanges: root.activityChanges,

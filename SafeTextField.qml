@@ -8,12 +8,15 @@ BorderSurface {
 
   property alias text: input.text
   property alias font: input.font
+  property alias focusTarget: input
   property string placeholderText: ""
   property color foreground: Commons.Color.foreground
   property color accent: Commons.Color.accent
   readonly property bool hovered: hover.hovered
   signal textEdited()
   signal accepted()
+
+  function focusInput() { input.forceActiveFocus() }
 
   implicitWidth: Style.space(160)
   implicitHeight: Math.max(Style.space(30), input.implicitHeight + 2 * Style.spacing.inputPaddingY)

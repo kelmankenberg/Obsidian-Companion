@@ -7,9 +7,11 @@ import datetime as dt
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -17,12 +19,14 @@ from typing import Any
 
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_NOTE_BYTES = 512 * 1024
+MAX_PREVIEW_CHARS = 4_000
 MAX_FILES = 20_000
 MAX_RESULTS = 80
 MAX_REMINDER_TASKS = 10_000
 BADGE_INTERVALS = {1, 5, 10, 15, 30, 60, 90}
 REMINDER_MODES = {"off", "daily_summary", "due_dates"}
 TASK_SORTS = {"file", "due_asc", "due_desc"}
+TASK_DUE_FILTERS = {"all", "overdue", "today", "upcoming", "undated"}
 MAX_TERMS = 12
 TABS = {"search", "recent", "pinned", "tasks"}
 CAPTURE_FORMATS = {"bullet", "task", "timestamp"}
@@ -209,9 +213,11 @@ def _note_title(path: Path, content: str) -> str:
 
 
 def _note_item(
-    root: Path, path: Path, terms: list[str] | None = None, pinned: bool = False
+    root: Path, path: Path, terms: list[str] | None = None, pinned: bool = False,
+    content: str | None = None,
 ) -> dict[str, Any]:
-    content = _read_note(path)
+    if content is None:
+        content = _read_note(path)
     relative = path.relative_to(root).as_posix()
     title = _note_title(path, content)
     preview = ""
@@ -230,6 +236,21 @@ def _uri(root: Path, note: Path) -> str:
     return "obsidian://open?" + urllib.parse.urlencode(
         {"vault": name, "file": file_name}, quote_via=urllib.parse.quote
     )
+
+
+def _copy_to_clipboard(text: str, description: str) -> None:
+    try:
+        subprocess.run(
+            ["wl-copy", "--sensitive"],
+            input=text,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise CompanionError(f"Could not copy {description} to the clipboard.") from error
 
 
 def _record_open(state: dict[str, Any], root: Path, relative: str) -> None:
@@ -310,6 +331,44 @@ def _render_template(content: str, date: dt.date, title: str = "") -> str:
     return re.sub(r"\{\{(date:[^}]+|title)\}\}", replace, content)
 
 
+def _append_existing_note(root: Path, value: Any, line: str, excluded: list[str]) -> Path:
+    if not isinstance(value, str) or not value or "\0" in value:
+        raise CompanionError("Select an existing note for capture.")
+    relative = Path(value)
+    if (relative.is_absolute() or not relative.parts or ".." in relative.parts
+            or relative.suffix.lower() != ".md"
+            or any(part in SKIP_DIRS for part in relative.parts)
+            or any(part.startswith(".") for part in relative.parts[:-1])
+            or _is_excluded(relative.as_posix(), excluded)):
+        raise CompanionError("Choose an available Markdown note inside the selected vault.")
+
+    directory_fd = None
+    note_fd = None
+    try:
+        directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        for part in relative.parts[:-1]:
+            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        note_fd = os.open(relative.name, os.O_RDWR | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK,
+                          dir_fd=directory_fd)
+        info = os.fstat(note_fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise CompanionError("The selected note is not a regular file.")
+        needs_newline = info.st_size > 0 and os.pread(note_fd, 1, info.st_size - 1) != b"\n"
+        with os.fdopen(note_fd, "ab") as note:
+            note_fd = None
+            note.write(("\n" if needs_newline else "").encode("utf-8") + (line + "\n").encode("utf-8"))
+    except OSError as error:
+        raise CompanionError(f"Could not append to the selected note: {error.strerror}.") from error
+    finally:
+        if note_fd is not None:
+            os.close(note_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
+    return relative
+
+
 def _capture(root: Path, state: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
     text = str(request.get("text", "")).strip()
     if not text:
@@ -319,8 +378,17 @@ def _capture(root: Path, state: dict[str, Any], request: dict[str, Any]) -> dict
     text = re.sub(r"[\r\n]+", " ", text)
     settings = _vault_settings(state, root)
     destination = str(request.get("destination") or settings["captureTarget"])
-    if destination not in CAPTURE_TARGETS:
+    if destination not in CAPTURE_TARGETS and destination != "note":
         raise CompanionError("Choose a valid capture destination.")
+    if settings["captureFormat"] == "task":
+        line = f"- [ ] {text}"
+    elif settings["captureFormat"] == "timestamp":
+        line = f"- {dt.datetime.now().strftime('%H:%M')} {text}"
+    else:
+        line = f"- {text}"
+    if destination == "note":
+        relative = _append_existing_note(root, request.get("path"), line, settings["excludedFolders"])
+        return {"ok": True, "message": f"Captured to {relative.as_posix()}."}
     if destination == "daily":
         path = _daily_file(root, create=True, vault_settings=settings)
     else:
@@ -329,12 +397,6 @@ def _capture(root: Path, state: dict[str, Any], request: dict[str, Any]) -> dict
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             path.write_text(f"# {path.stem}\n\n", encoding="utf-8")
-    if settings["captureFormat"] == "task":
-        line = f"- [ ] {text}"
-    elif settings["captureFormat"] == "timestamp":
-        line = f"- {dt.datetime.now().strftime('%H:%M')} {text}"
-    else:
-        line = f"- {text}"
     with path.open("a", encoding="utf-8") as note:
         note.write(line + "\n")
     return {"ok": True, "message": f"Captured to {path.relative_to(root).as_posix()}."}
@@ -355,18 +417,161 @@ def _request_terms(request: dict[str, Any], text_key: str) -> list[str]:
     return terms
 
 
+def _tag_character(char: str) -> bool:
+    return char in "_-/\u200d" or unicodedata.category(char)[0] in "LMNS"
+
+
+def _normalize_tag(value: str) -> str:
+    tag = value.strip().removeprefix("#")
+    if (not tag or len(tag) > 200 or any(not _tag_character(char) for char in tag)
+            or any(not part for part in tag.split("/"))
+            or not any(not char.isdigit() and char != "/" for char in tag)):
+        raise CompanionError("Enter a valid tag, such as #project or project/meeting.")
+    return tag.casefold()
+
+
+def _folder_filter(value: Any) -> str:
+    if not isinstance(value, str):
+        raise CompanionError("The folder filter must be a path relative to the vault.")
+    folder = value.strip()
+    if not folder or folder == ".":
+        return folder
+    path = Path(folder)
+    if (len(folder) > 500 or "\0" in folder or path.is_absolute()
+            or ".." in path.parts or any(part in SKIP_DIRS or part.startswith(".") for part in path.parts)):
+        raise CompanionError("Enter a folder path relative to the vault, without '..'.")
+    return path.as_posix()
+
+
+def _inline_tags(content: str) -> set[str]:
+    tags: set[str] = set()
+    fence_char = ""
+    fence_length = 0
+    code_ticks = 0
+    in_comment = False
+    lines = content.splitlines()
+    last_tick = {}
+    for line_number, line in enumerate(lines):
+        for match in re.finditer(r"`+", line):
+            last_tick[len(match.group())] = (line_number, match.start())
+    for line_number, line in enumerate(lines):
+        fence = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if not in_comment and not code_ticks and fence:
+            marker, rest = fence.groups()
+            if not fence_char:
+                fence_char, fence_length = marker[0], len(marker)
+                continue
+            if marker[0] == fence_char and len(marker) >= fence_length and not rest.strip():
+                fence_char = ""
+                continue
+        if fence_char:
+            continue
+        index = 0
+        while index < len(line):
+            if in_comment:
+                end = line.find("-->", index)
+                if end < 0:
+                    break
+                in_comment = False
+                index = end + 3
+            elif not code_ticks and line.startswith("<!--", index):
+                in_comment = True
+                index += 4
+            elif line[index] == "`":
+                end = index
+                while end < len(line) and line[end] == "`":
+                    end += 1
+                length = end - index
+                if not code_ticks and last_tick[length] > (line_number, index):
+                    code_ticks = length
+                elif code_ticks == length:
+                    code_ticks = 0
+                index = end
+            elif code_ticks:
+                index += 1
+            elif line[index] == "\\":
+                index += 2
+            elif line[index] == "<" and ">" in line[index:]:
+                index = line.index(">", index) + 1
+            elif (line[index] == "#" and (index == 0
+                  or (not _tag_character(line[index - 1]) and line[index - 1] not in "\\#"))):
+                end = index + 1
+                while end < len(line) and _tag_character(line[end]):
+                    end += 1
+                try:
+                    tags.add(_normalize_tag(line[index + 1:end]))
+                except CompanionError:
+                    pass
+                index = end
+            else:
+                index += 1
+    return tags
+
+
+def _note_tags(content: str, relative: str, yaml_module: Any) -> set[str]:
+    lines = content.splitlines()
+    frontmatter = ""
+    body = content
+    if lines and lines[0].lstrip("\ufeff") == "---":
+        end = next((index for index in range(1, len(lines)) if lines[index] in {"---", "..."}), None)
+        if end is not None:
+            frontmatter = "\n".join(lines[1:end])
+            body = "\n".join(lines[end + 1:])
+    tags = _inline_tags(body)
+    if not frontmatter.strip():
+        return tags
+    try:
+        metadata = yaml_module.safe_load(frontmatter)
+    except (yaml_module.YAMLError, RecursionError) as error:
+        raise CompanionError(f"Could not read YAML tags in {relative}: {error}") from error
+    if metadata is None:
+        return tags
+    if not isinstance(metadata, dict):
+        raise CompanionError(f"Invalid YAML properties in {relative}.")
+    values = metadata.get("tags", [])
+    if values is None:
+        return tags
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+        raise CompanionError(f"Tags in {relative} must be a list of text values.")
+    for value in values:
+        try:
+            tags.add(_normalize_tag(value))
+        except CompanionError as error:
+            raise CompanionError(f"Invalid tag in {relative}: {value}") from error
+    return tags
+
+
 def _search(
-    root: Path, terms: list[str], pins: list[str], excluded: list[str] | None = None
+    root: Path, terms: list[str], pins: list[str], excluded: list[str] | None = None,
+    tag_filter: str = "", folder_filter: str = "",
 ) -> list[dict[str, Any]]:
-    if not terms:
+    folder = _folder_filter(folder_filter)
+    tag = _normalize_tag(tag_filter) if tag_filter.strip() else ""
+    yaml_module = None
+    if tag:
+        try:
+            import yaml as yaml_module
+        except ModuleNotFoundError as error:
+            if error.name != "yaml":
+                raise
+            raise CompanionError("Tag filtering requires python-yaml. Install it and try again.") from error
+    if not terms and not tag and not folder:
         return []
     results = []
     for path in _markdown_files(root, excluded):
+        relative = path.relative_to(root).as_posix()
+        parent = path.parent.relative_to(root).as_posix()
+        if folder and not (parent == folder or (folder != "." and parent.startswith(folder + "/"))):
+            continue
         content = _read_note(path)
         haystack = path.stem.casefold() + "\n" + content.casefold()
         if all(term in haystack for term in terms):
-            relative = path.relative_to(root).as_posix()
-            results.append(_note_item(root, path, terms, relative in pins))
+            if tag and not any(found == tag or found.startswith(tag + "/")
+                               for found in _note_tags(content, relative, yaml_module)):
+                continue
+            results.append(_note_item(root, path, terms, relative in pins, content))
             if len(results) >= MAX_RESULTS:
                 break
     return results
@@ -399,11 +604,21 @@ def _tasks(
 
 
 def _filtered_tasks(
-    root: Path, terms: list[str], sort: str, excluded: list[str] | None = None
+    root: Path, terms: list[str], sort: str, excluded: list[str] | None = None,
+    due_filter: str = "all",
 ) -> list[dict[str, Any]]:
     if sort not in TASK_SORTS:
         raise CompanionError("Choose a valid task sort order.")
+    if not isinstance(due_filter, str) or due_filter not in TASK_DUE_FILTERS:
+        raise CompanionError("Choose a valid task due-date filter.")
     tasks = _tasks(root, MAX_REMINDER_TASKS, excluded)
+
+    def due_date(task: dict[str, Any]) -> dt.date | None:
+        try:
+            return dt.date.fromisoformat(task["due"])
+        except ValueError:
+            return None
+
     if terms:
         tasks = [
             task for task in tasks
@@ -412,13 +627,25 @@ def _filtered_tasks(
                 for term in terms
             )
         ]
+    if due_filter != "all":
+        today = dt.date.today()
+
+        def matches_due(task: dict[str, Any]) -> bool:
+            date = due_date(task)
+            if date is None:
+                return due_filter == "undated"
+            return ((due_filter == "overdue" and date < today)
+                    or (due_filter == "today" and date == today)
+                    or (due_filter == "upcoming" and date > today))
+
+        tasks = [task for task in tasks if matches_due(task)]
     if sort != "file":
         dated = sorted(
-            (task for task in tasks if task["due"]),
+            (task for task in tasks if due_date(task) is not None),
             key=lambda task: task["due"],
             reverse=sort == "due_desc",
         )
-        tasks = dated + [task for task in tasks if not task["due"]]
+        tasks = dated + [task for task in tasks if due_date(task) is None]
     return tasks[:MAX_RESULTS]
 
 
@@ -784,9 +1011,13 @@ def _handle(request: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "message": "Cleared notes opened from Companion."}
     if action == "search":
         pins = state["pinned"].get(str(root), [])
+        tag = request.get("tag", "")
+        if not isinstance(tag, str):
+            raise CompanionError("The tag filter must be text.")
         return {
             "ok": True,
-            "items": _search(root, _request_terms(request, "query"), pins, excluded),
+            "items": _search(root, _request_terms(request, "query"), pins, excluded,
+                             tag, request.get("folder", "")),
         }
     if action in {"recent", "pinned"}:
         if action == "recent":
@@ -835,6 +1066,7 @@ def _handle(request: dict[str, Any]) -> dict[str, Any]:
                 _request_terms(request, "filter"),
                 str(request.get("sort", "file")),
                 excluded,
+                request.get("dueFilter", "all"),
             ),
         }
     if action == "set_reminders":
@@ -847,6 +1079,37 @@ def _handle(request: dict[str, Any]) -> dict[str, Any]:
         }
     if action == "reminder_check":
         return {"ok": True, "notifications": _check_reminders(root, state)}
+    if action == "open_vault":
+        vault = next((item for item in _vaults(state) if item["path"] == str(root)), None)
+        if not vault or not vault["id"]:
+            raise CompanionError("Open this vault in Obsidian once before opening it from Companion.")
+        return {
+            "ok": True,
+            "uri": "obsidian://open?" + urllib.parse.urlencode(
+                {"vault": vault["id"]}, quote_via=urllib.parse.quote
+            ),
+        }
+    if action in {"preview_note", "copy_note_link"}:
+        relative = _relative_path(root, str(request.get("path", "")))
+        note = root / relative
+        if relative.suffix.lower() != ".md" or not note.is_file():
+            raise CompanionError("That note no longer exists.")
+        if action == "preview_note":
+            try:
+                with note.open(encoding="utf-8") as file:
+                    content = file.read(MAX_PREVIEW_CHARS + 1)
+            except (OSError, UnicodeError) as error:
+                raise CompanionError(f"Could not read note {note.name}: {error}") from error
+            return {"ok": True, "text": content[:MAX_PREVIEW_CHARS],
+                    "truncated": len(content) > MAX_PREVIEW_CHARS}
+        vault = next((item for item in _vaults(state) if item["path"] == str(root)), None)
+        vault_name = vault["id"] if vault and vault["id"] else root.name
+        link = "obsidian://open?" + urllib.parse.urlencode(
+            {"vault": vault_name, "file": relative.with_suffix("").as_posix()},
+            quote_via=urllib.parse.quote,
+        )
+        _copy_to_clipboard(link, "the note link")
+        return {"ok": True, "message": "Obsidian link copied to the clipboard."}
     if action == "open":
         relative = _relative_path(root, str(request.get("path", "")))
         path = root / relative
@@ -937,18 +1200,7 @@ def _handle(request: dict[str, Any]) -> dict[str, Any]:
             f"{content}\n"
             "---"
         )
-        try:
-            subprocess.run(
-                ["wl-copy", "--sensitive"],
-                input=prompt,
-                text=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                check=True,
-                timeout=10,
-            )
-        except (OSError, subprocess.SubprocessError) as error:
-            raise CompanionError("Could not copy the AI prompt to the clipboard.") from error
+        _copy_to_clipboard(prompt, "the AI prompt")
         return {"ok": True, "message": "Prompt copied. Paste it into your AI agent."}
     raise CompanionError(f"Unknown action: {action or '(empty)'}")
 

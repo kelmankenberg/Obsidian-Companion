@@ -1,4 +1,5 @@
 import datetime as dt
+import builtins
 import json
 import os
 import stat
@@ -7,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -81,6 +83,81 @@ class CompanionTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["path"], "note.md")
         self.assertEqual(results[0]["preview"], "A useful phrase here.")
+
+    def test_search_filters_folders_including_nested_and_root(self):
+        (self.root / "Work" / "Nested").mkdir(parents=True)
+        (self.root / "Workshops").mkdir()
+        (self.root / "Work" / "a.md").write_text("Alpha needle", encoding="utf-8")
+        (self.root / "Work" / "Nested" / "b.md").write_text("Beta needle", encoding="utf-8")
+        (self.root / "Workshops" / "c.md").write_text("Other needle", encoding="utf-8")
+        (self.root / "root.md").write_text("Root needle", encoding="utf-8")
+        found = self.run_action("search", folder="Work")["items"]
+        self.assertEqual([item["path"] for item in found], ["Work/a.md", "Work/Nested/b.md"])
+        found = self.run_action("search", folder="Work", query="beta")["items"]
+        self.assertEqual([item["path"] for item in found], ["Work/Nested/b.md"])
+        found = self.run_action("search", folder=".")["items"]
+        self.assertEqual([item["path"] for item in found], ["root.md"])
+        self.run_action("save_vault_settings", settings={"excludedFolders": ["Work/Nested"]})
+        found = self.run_action("search", folder="Work")["items"]
+        self.assertEqual([item["path"] for item in found], ["Work/a.md"])
+
+    def test_search_filters_inline_and_yaml_tags_and_nested_tags(self):
+        (self.root / "inline.md").write_text("Useful #Work/Meeting\n", encoding="utf-8")
+        (self.root / "metadata.md").write_text(
+            '---\n"tags": ["work", "research/β", "café"]\n---\nUseful text\n',
+            encoding="utf-8",
+        )
+        (self.root / "list.md").write_text(
+            "---\ntags:\n  - work/meeting\n  - 'other'\n---\nUseful text\n", encoding="utf-8"
+        )
+        (self.root / "different.md").write_text("#workshop\n", encoding="utf-8")
+        (self.root / "code.md").write_text(
+            "```\n#work\n```\n`#work` \\#work <!-- #work -->\n"
+            "<a href='#work'>link</a>\n", encoding="utf-8"
+        )
+        found = self.run_action("search", tag="#WORK")["items"]
+        self.assertEqual({item["path"] for item in found}, {"inline.md", "metadata.md", "list.md"})
+        found = self.run_action("search", tag="work/meeting", terms=["useful"])["items"]
+        self.assertEqual({item["path"] for item in found}, {"inline.md", "list.md"})
+        self.assertEqual([item["path"] for item in self.run_action("search", tag="CAFÉ")["items"]],
+                         ["metadata.md"])
+        self.assertEqual([item["path"] for item in self.run_action("search", tag="research/β")["items"]],
+                         ["metadata.md"])
+
+    def test_search_rejects_invalid_filters_and_reports_invalid_yaml(self):
+        for folder in ("../outside", "/tmp", "folder/../other", ".obsidian"):
+            with self.subTest(folder=folder), self.assertRaises(companion.CompanionError):
+                self.run_action("search", folder=folder)
+        for tag in ("#", "two words", "123", "tag//child"):
+            with self.subTest(tag=tag), self.assertRaises(companion.CompanionError):
+                self.run_action("search", tag=tag)
+        (self.root / "bad.md").write_text("---\ntags: [broken\n---\n", encoding="utf-8")
+        with self.assertRaisesRegex(companion.CompanionError, "YAML tags in bad.md"):
+            self.run_action("search", tag="work")
+
+    def test_search_tag_filter_handles_unmatched_and_multiline_code_spans(self):
+        (self.root / "note.md").write_text(
+            "Unmatched `` marker and #visible\n"
+            "A `code span\n#hidden` and #also-visible\n",
+            encoding="utf-8",
+        )
+        for tag in ("visible", "also-visible"):
+            self.assertEqual(len(self.run_action("search", tag=tag)["items"]), 1)
+        self.assertEqual(self.run_action("search", tag="hidden")["items"], [])
+
+    def test_search_reports_missing_yaml_only_for_tag_filters(self):
+        original_import = builtins.__import__
+
+        def import_without_yaml(name, *args, **kwargs):
+            if name == "yaml":
+                raise ModuleNotFoundError("No module named 'yaml'", name="yaml")
+            return original_import(name, *args, **kwargs)
+
+        (self.root / "note.md").write_text("needle #work", encoding="utf-8")
+        with patch("builtins.__import__", side_effect=import_without_yaml):
+            self.assertEqual(len(self.run_action("search", query="needle")["items"]), 1)
+            with self.assertRaisesRegex(companion.CompanionError, "requires python-yaml"):
+                self.run_action("search", tag="work")
 
     def test_activity_counts_due_tasks_and_missing_daily_note(self):
         today = dt.date.today()
@@ -183,6 +260,127 @@ class CompanionTests(unittest.TestCase):
         capture = self.root / "Inbox" / f"{dt.date.today().isoformat()}.md"
         self.assertIn("- Remember this", capture.read_text(encoding="utf-8"))
 
+    def test_open_vault_uses_obsidian_id_for_selected_path(self):
+        other = Path(self.temp.name) / "Other" / self.root.name
+        other.mkdir(parents=True)
+        self.addCleanup(setattr, companion, "_obsidian_config", companion._obsidian_config)
+        companion._obsidian_config = lambda: {
+            "vaults": {
+                "first&vault": {"path": str(self.root)},
+                "second": {"path": str(other)},
+            }
+        }
+        self.assertEqual(self.run_action("open_vault")["uri"],
+                         "obsidian://open?vault=first%26vault")
+        response = companion._handle({"action": "open_vault", "vault": str(other)})
+        self.assertEqual(response["uri"], "obsidian://open?vault=second")
+
+    def test_open_vault_rejects_unregistered_or_missing_vault(self):
+        custom = Path(self.temp.name) / "Custom"
+        custom.mkdir()
+        with self.assertRaisesRegex(companion.CompanionError, "Open this vault in Obsidian"):
+            companion._handle({"action": "open_vault", "vault": str(custom)})
+        custom.rmdir()
+        with self.assertRaisesRegex(companion.CompanionError, "existing Obsidian vault"):
+            companion._handle({"action": "open_vault", "vault": str(custom)})
+
+    def test_preview_reads_bounded_literal_text_and_empty_notes(self):
+        note = self.root / "note.md"
+        content = "<img src='https://invalid.example/a'>\n" + "x" * companion.MAX_PREVIEW_CHARS
+        note.write_text(content, encoding="utf-8")
+        response = self.run_action("preview_note", path="note.md")
+        self.assertEqual(response["text"], content[:companion.MAX_PREVIEW_CHARS])
+        self.assertTrue(response["truncated"])
+        self.assertEqual(note.read_text(encoding="utf-8"), content)
+        note.write_text("x" * companion.MAX_PREVIEW_CHARS, encoding="utf-8")
+        self.assertFalse(self.run_action("preview_note", path="note.md")["truncated"])
+        note.write_text("", encoding="utf-8")
+        self.assertEqual(self.run_action("preview_note", path="note.md"),
+                         {"ok": True, "text": "", "truncated": False})
+        note.write_bytes(b"\xff")
+        with self.assertRaisesRegex(companion.CompanionError, "Could not read note"):
+            self.run_action("preview_note", path="note.md")
+
+    def test_preview_and_copy_reject_unavailable_or_outside_notes(self):
+        (self.root / "not-note.txt").write_text("private", encoding="utf-8")
+        for action in ("preview_note", "copy_note_link"):
+            for path in ("missing.md", "not-note.txt", "../outside.md"):
+                with self.subTest(action=action, path=path), self.assertRaises(companion.CompanionError):
+                    self.run_action(action, path=path)
+
+    def test_copy_note_link_uses_registered_vault_id_and_encoded_path(self):
+        folder = self.root / "Work & projects"
+        folder.mkdir()
+        (folder / "café #1.md").write_text("Secret body", encoding="utf-8")
+        with patch.object(companion.subprocess, "run") as copy:
+            response = self.run_action("copy_note_link", path="Work & projects/café #1.md")
+        args, kwargs = copy.call_args
+        self.assertEqual(args[0], ["wl-copy", "--sensitive"])
+        parsed = urlparse(kwargs["input"])
+        self.assertEqual((parsed.scheme, parsed.netloc), ("obsidian", "open"))
+        self.assertEqual(parse_qs(parsed.query),
+                         {"vault": ["one"], "file": ["Work & projects/café #1"]})
+        self.assertNotIn("Secret body", kwargs["input"])
+        self.assertNotIn("uri", response)
+
+    def test_copy_note_link_supports_custom_vault_and_reports_clipboard_failure(self):
+        custom = self.root.parent / "Custom vault"
+        custom.mkdir()
+        (custom / "note.md").write_text("note", encoding="utf-8")
+        with patch.object(companion.subprocess, "run") as copy:
+            companion._handle({"action": "copy_note_link", "vault": str(custom), "path": "note.md"})
+        self.assertEqual(parse_qs(urlparse(copy.call_args.kwargs["input"]).query)["vault"],
+                         ["Custom vault"])
+        with patch.object(companion.subprocess, "run", side_effect=OSError("missing")):
+            with self.assertRaisesRegex(companion.CompanionError, "Could not copy the note link"):
+                companion._handle({"action": "copy_note_link", "vault": str(custom), "path": "note.md"})
+
+    def test_capture_to_existing_note_preserves_boundaries_and_capture_format(self):
+        folder = self.root / "Notes"
+        folder.mkdir()
+        note = folder / "meeting.md"
+        for contents, capture_format, expected in (
+            ("", "bullet", "- New idea\n"),
+            ("# Meeting\n", "task", "# Meeting\n- [ ] New idea\n"),
+            ("# Meeting", "bullet", "# Meeting\n- New idea\n"),
+        ):
+            with self.subTest(contents=contents, capture_format=capture_format):
+                note.write_text(contents, encoding="utf-8")
+                self.run_action("save_vault_settings", settings={"captureFormat": capture_format})
+                response = self.run_action("capture", destination="note", path="Notes/meeting.md",
+                                           text="New idea")
+                self.assertIn("Notes/meeting.md", response["message"])
+                self.assertEqual(note.read_text(encoding="utf-8"), expected)
+        note.write_text("Existing\n", encoding="utf-8")
+        self.run_action("save_vault_settings", settings={"captureFormat": "timestamp"})
+        self.run_action("capture", destination="note", path="Notes/meeting.md", text="New idea")
+        self.assertRegex(note.read_text(encoding="utf-8"), r"^Existing\n- \d{2}:\d{2} New idea\n$")
+
+    def test_capture_to_existing_note_rejects_invalid_and_unsafe_targets(self):
+        outside = Path(self.temp.name) / "outside.md"
+        outside.write_text("Outside", encoding="utf-8")
+        (self.root / "real.md").write_text("Real", encoding="utf-8")
+        (self.root / "text.txt").write_text("Text", encoding="utf-8")
+        (self.root / "file-link.md").symlink_to(outside)
+        (self.root / "internal-link.md").symlink_to(self.root / "real.md")
+        (self.root / "directory-link").symlink_to(Path(self.temp.name), target_is_directory=True)
+        (self.root / "Archive").mkdir()
+        (self.root / "Archive" / "hidden.md").write_text("Hidden", encoding="utf-8")
+        os.mkfifo(self.root / "pipe.md")
+        self.run_action("save_vault_settings", settings={"excludedFolders": ["Archive"]})
+        for target in (None, "", "missing.md", "../outside.md", str(outside), "text.txt",
+                       ".obsidian/private.md", "file-link.md", "internal-link.md",
+                       "directory-link/outside.md", "Archive/hidden.md", "pipe.md"):
+            with self.subTest(target=target), self.assertRaises(companion.CompanionError):
+                self.run_action("capture", destination="note", path=target, text="Must not write")
+        self.assertEqual(outside.read_text(encoding="utf-8"), "Outside")
+        self.assertEqual((self.root / "real.md").read_text(encoding="utf-8"), "Real")
+        self.assertFalse((self.root / "missing.md").exists())
+
+    def test_selected_note_cannot_be_a_default_capture_destination(self):
+        with self.assertRaises(companion.CompanionError):
+            self.run_action("save_vault_settings", settings={"captureTarget": "note"})
+
     def test_note_paths_cannot_escape_vault(self):
         with self.assertRaises(companion.CompanionError):
             companion._relative_path(self.root, "../outside.md")
@@ -211,6 +409,56 @@ class CompanionTests(unittest.TestCase):
             [task["text"] for task in descending],
             ["Late report 📅 2026-03-01", "Early report 📅 2026-01-01", "Undated report"],
         )
+
+    def test_task_due_filters_combine_with_text_sort_and_exclusions(self):
+        today = dt.date.today()
+        yesterday = (today - dt.timedelta(days=1)).isoformat()
+        tomorrow = (today + dt.timedelta(days=1)).isoformat()
+        next_week = (today + dt.timedelta(days=7)).isoformat()
+        (self.root / "tasks.md").write_text(
+            f"- [ ] Overdue report 📅 {yesterday}\n"
+            f"- [ ] Today report 📅 {today.isoformat()}\n"
+            f"- [ ] Later report 📅 {next_week}\n"
+            f"- [ ] Tomorrow report 📅 {tomorrow}\n"
+            "- [ ] Undated report\n"
+            "- [ ] Invalid report 📅 2026-99-99\n"
+            f"- [x] Completed report 📅 {yesterday}\n",
+            encoding="utf-8",
+        )
+        (self.root / "Archive").mkdir()
+        (self.root / "Archive" / "hidden.md").write_text(
+            f"- [ ] Hidden report 📅 {yesterday}\n", encoding="utf-8"
+        )
+        self.run_action("save_vault_settings", settings={"excludedFolders": ["Archive"]})
+        expected = {
+            "overdue": ["Overdue"],
+            "today": ["Today"],
+            "upcoming": ["Later", "Tomorrow"],
+            "undated": ["Undated", "Invalid"],
+        }
+        for due_filter, names in expected.items():
+            with self.subTest(due_filter=due_filter):
+                result = self.run_action("tasks", dueFilter=due_filter, terms=["REPORT"])["items"]
+                self.assertEqual([task["text"].split()[0] for task in result], names)
+        result = self.run_action("tasks", dueFilter="upcoming", filter="report", sort="due_asc")["items"]
+        self.assertEqual([task["text"].split()[0] for task in result], ["Tomorrow", "Later"])
+        result = self.run_action("tasks", sort="due_asc")["items"]
+        self.assertEqual([task["text"].split()[0] for task in result],
+                         ["Overdue", "Today", "Tomorrow", "Later", "Undated", "Invalid"])
+        self.assertEqual(len(self.run_action("tasks")["items"]), 6)
+        self.assertEqual(self.run_action("tasks", dueFilter="today", filter="missing")["items"], [])
+        for value in ("invalid", "", None, 1):
+            with self.subTest(value=value), self.assertRaisesRegex(companion.CompanionError, "due-date filter"):
+                self.run_action("tasks", dueFilter=value)
+
+    def test_task_due_filter_applies_before_result_limit(self):
+        today = dt.date.today().isoformat()
+        (self.root / "tasks.md").write_text(
+            "".join(f"- [ ] Undated {index}\n" for index in range(companion.MAX_RESULTS))
+            + f"- [ ] Visible today 📅 {today}\n", encoding="utf-8"
+        )
+        self.assertEqual([task["text"] for task in self.run_action("tasks", dueFilter="today")["items"]],
+                         [f"Visible today 📅 {today}"])
 
     def test_search_and_task_terms_must_all_match(self):
         (self.root / "both.md").write_text("ESV notes on Hebrews\n", encoding="utf-8")
